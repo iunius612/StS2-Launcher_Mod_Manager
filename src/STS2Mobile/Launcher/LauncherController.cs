@@ -1,5 +1,6 @@
 using System;
 using System.Threading.Tasks;
+using Godot;
 using STS2Mobile.Patches;
 using STS2Mobile.Steam;
 
@@ -29,6 +30,11 @@ public class LauncherController
     {
         _model.SessionStateChanged += s => _runOnMainThread(() => UpdateUI(s));
         _model.LogReceived += msg => _runOnMainThread(() => _view.AppendLog(msg));
+        PatchHelper.LogEmitted += msg =>
+        {
+            if (msg.StartsWith("[Cloud]"))
+                _runOnMainThread(() => _view.AppendLog(msg));
+        };
         _model.CodeNeeded += wasIncorrect =>
             _runOnMainThread(() =>
             {
@@ -52,7 +58,7 @@ public class LauncherController
                 _view.Download.Visible = false;
                 if (LauncherModel.GameFilesReady())
                 {
-                    var text = _model.HasLaunchTcs ? "LAUNCH" : "RESTART APP";
+                    var text = _model.InGameMode ? "PLAY" : "RESTART APP";
                     _view.Actions.ShowLaunch(text, showCloudSync: false, showUpdate: false);
                 }
                 else
@@ -103,9 +109,17 @@ public class LauncherController
         _view.Download.DownloadRequested += OnDownloadPressed;
         _view.Actions.LaunchPressed += OnLaunchPressed;
         _view.Actions.RetryPressed += OnRetryPressed;
+        _view.Actions.LocalBackupToggled += OnLocalBackupToggled;
         _view.Actions.CloudSyncToggled += OnCloudSyncToggled;
+        _view.Actions.CloudPushPressed += OnCloudPushPressed;
+        _view.Actions.CloudPullPressed += OnCloudPullPressed;
         _view.Actions.CheckForUpdatesPressed += OnCheckForUpdatesPressed;
 
+        var localBackupPref = LauncherModel.LoadLocalBackupPref();
+        _view.Actions.SetLocalBackupChecked(localBackupPref);
+        CloudSyncCoordinator.LocalBackupEnabled = localBackupPref;
+        if (localBackupPref)
+            AppPaths.EnsureExternalDirectories();
         _view.Actions.SetCloudSyncChecked(LauncherModel.LoadCloudSyncPref());
 
         var result = _model.StartSession();
@@ -116,6 +130,12 @@ public class LauncherController
     {
         switch (result)
         {
+            case FastPathResult.ReadyToLaunch:
+                _view.SetStatus($"Welcome back, {_model.AccountName}");
+                var text = _model.InGameMode ? "PLAY" : "RESTART APP";
+                _view.Actions.ShowLaunch(text, showCloudSync: true, showUpdate: true);
+                break;
+
             case FastPathResult.AutoConnect:
                 _model.Connect();
                 StartConnectionTimeout();
@@ -144,19 +164,15 @@ public class LauncherController
                 or SessionState.VerifyingOwnership
         )
         {
-            if (_model.Session.HasValidOwnershipMarker() && LauncherModel.GameFilesReady())
+            if (_model.HasOwnershipMarker() && LauncherModel.GameFilesReady())
             {
                 _runOnMainThread(() =>
                 {
-                    _view.SetStatus("No connection — launching offline");
+                    _view.SetStatus("No connection — saved credentials will be used");
                     _view.AppendLog("Connection timed out. Valid ownership marker found.");
-                    _view.Actions.ShowLaunch(
-                        "PLAY OFFLINE",
-                        showCloudSync: false,
-                        showUpdate: false
-                    );
+                    var text = _model.InGameMode ? "PLAY" : "RESTART APP";
+                    _view.Actions.ShowLaunch(text, showCloudSync: true, showUpdate: false);
                 });
-                _model.OfflineMode = true;
             }
             else
             {
@@ -182,6 +198,11 @@ public class LauncherController
             return;
 
         if (_checkingForUpdates)
+            return;
+
+        // After successful login, ignore session disconnects — cloud ops use
+        // their own token-based connections, so the launcher session dropping is expected.
+        if (state == SessionState.Disconnected && _model.ConnectionResolved)
             return;
 
         _view.HideAllSections();
@@ -211,12 +232,8 @@ public class LauncherController
                 _view.SetStatus($"Logged in as {_model.AccountName}");
                 if (LauncherModel.GameFilesReady())
                 {
-                    var text = _model.HasLaunchTcs ? "LAUNCH" : "RESTART APP";
-                    _view.Actions.ShowLaunch(
-                        text,
-                        showCloudSync: !_model.OfflineMode,
-                        showUpdate: true
-                    );
+                    var text = _model.InGameMode ? "PLAY" : "RESTART APP";
+                    _view.Actions.ShowLaunch(text, showCloudSync: true, showUpdate: true);
                 }
                 else
                 {
@@ -233,27 +250,9 @@ public class LauncherController
                 break;
 
             case SessionState.Disconnected:
-                if (_model.ConnectionResolved && LauncherModel.GameFilesReady())
-                {
-                    _view.SetStatus("Disconnected from Steam");
-                    _view.Actions.ShowLaunch(
-                        "PLAY OFFLINE",
-                        showCloudSync: false,
-                        showUpdate: false
-                    );
-                    _model.OfflineMode = true;
-                }
-                else if (!_model.ConnectionResolved)
-                {
-                    _view.SetStatus("Enter your Steam credentials");
-                    _view.Login.Visible = true;
-                    _view.Login.SetDisabled(false);
-                }
-                else
-                {
-                    _view.SetStatus("Disconnected from Steam");
-                    _view.Actions.ShowRetry();
-                }
+                _view.SetStatus("Enter your Steam credentials");
+                _view.Login.Visible = true;
+                _view.Login.SetDisabled(false);
                 break;
         }
     }
@@ -282,14 +281,116 @@ public class LauncherController
         _checkingForUpdates = true;
         _view.Actions.SetUpdateButtonDisabled(true);
         _view.Actions.SetUpdateButtonText("Checking...");
+
+        // Check for launcher (APK) updates from GitHub in parallel with game file updates.
+        var appUpdateTask = CheckAppUpdateAsync();
         await _model.CheckForUpdatesAsync();
+        await appUpdateTask;
+
         _checkingForUpdates = false;
+    }
+
+    private static readonly Color YellowLog = new(1f, 0.85f, 0.2f);
+
+    private async Task CheckAppUpdateAsync()
+    {
+        try
+        {
+            var result = await AppUpdateChecker.CheckAsync();
+            if (!result.HasUpdate)
+            {
+                _runOnMainThread(() => _view.AppendLog("Launcher is up to date"));
+            }
+            else
+            {
+                _runOnMainThread(() =>
+                {
+                    _view.AppendColoredLog(
+                        $"Launcher update available: v{result.LatestVersion} — "
+                            + "download at https://github.com/Ekyso/StS2-Launcher/releases/latest",
+                        YellowLog
+                    );
+                    _view.SetStatus(
+                        $"Launcher update available! Visit GitHub to download v{result.LatestVersion}"
+                    );
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            PatchHelper.Log($"[Launcher] App update check failed: {ex.Message}");
+        }
+    }
+
+    private void OnLocalBackupToggled(bool pressed)
+    {
+        if (pressed && !AppPaths.HasStoragePermission())
+            AppPaths.RequestStoragePermission();
+
+        if (pressed)
+            AppPaths.EnsureExternalDirectories();
+
+        LauncherModel.SaveLocalBackupPref(pressed);
+        CloudSyncCoordinator.LocalBackupEnabled = pressed;
     }
 
     private void OnCloudSyncToggled(bool pressed)
     {
         LauncherModel.SaveCloudSyncPref(pressed);
         LauncherPatches.CloudSyncEnabled = pressed;
+    }
+
+    private void OnCloudPushPressed()
+    {
+        ShowConfirmation(
+            "Push local saves to cloud?\nThis will overwrite your cloud saves.",
+            () =>
+            {
+                _view.Actions.SetPushPullDisabled(true);
+                _view.AppendLog("Pushing local saves to cloud...");
+                Task.Run(async () =>
+                {
+                    await CloudSyncCoordinator.ManualPushAllAsync(
+                        LauncherPatches.SavedAccountName,
+                        LauncherPatches.SavedRefreshToken
+                    );
+                    _runOnMainThread(() =>
+                    {
+                        _view.AppendLog("Push complete.");
+                        _view.Actions.SetPushPullDisabled(false);
+                    });
+                });
+            }
+        );
+    }
+
+    private void OnCloudPullPressed()
+    {
+        ShowConfirmation(
+            "Pull cloud saves to local?\nThis will overwrite your local saves.",
+            () =>
+            {
+                _view.Actions.SetPushPullDisabled(true);
+                _view.AppendLog("Pulling cloud saves to local...");
+                Task.Run(async () =>
+                {
+                    await CloudSyncCoordinator.ManualPullAllAsync(
+                        LauncherPatches.SavedAccountName,
+                        LauncherPatches.SavedRefreshToken
+                    );
+                    _runOnMainThread(() =>
+                    {
+                        _view.AppendLog("Pull complete.");
+                        _view.Actions.SetPushPullDisabled(false);
+                    });
+                });
+            }
+        );
+    }
+
+    private void ShowConfirmation(string message, Action onConfirmed)
+    {
+        _view.ShowConfirmation(message, onConfirmed);
     }
 
     private void OnRetryPressed()

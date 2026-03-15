@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+NO_BUMP=false
+if [[ "${1:-}" == "--no-bump" ]]; then
+    NO_BUMP=true
+fi
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PATCHER_DIR="$ROOT/src/STS2Mobile"
 BUILD_DIR="$ROOT/android"
@@ -34,18 +39,24 @@ fi
 
 echo "Copied patcher + dependencies to android assets"
 
-# 3. Bump version
+# 3. Bump version (skip with --no-bump)
 CURRENT_NAME=$(grep '^export_version_name=' "$GRADLE_PROPS" | cut -d= -f2)
 CURRENT_CODE=$(grep '^export_version_code=' "$GRADLE_PROPS" | cut -d= -f2)
 
-IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_NAME"
-PATCH=$((PATCH + 1))
-NEW_NAME="$MAJOR.$MINOR.$PATCH"
-NEW_CODE=$((CURRENT_CODE + 1))
+if [ "$NO_BUMP" = true ]; then
+    NEW_NAME="$CURRENT_NAME"
+    NEW_CODE="$CURRENT_CODE"
+    echo "Version: $NEW_NAME ($NEW_CODE) (no bump)"
+else
+    IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_NAME"
+    PATCH=$((PATCH + 1))
+    NEW_NAME="$MAJOR.$MINOR.$PATCH"
+    NEW_CODE=$((CURRENT_CODE + 1))
 
-sed -i "s/^export_version_name=.*/export_version_name=$NEW_NAME/" "$GRADLE_PROPS"
-sed -i "s/^export_version_code=.*/export_version_code=$NEW_CODE/" "$GRADLE_PROPS"
-echo "Version: $CURRENT_NAME ($CURRENT_CODE) -> $NEW_NAME ($NEW_CODE)"
+    sed -i "s/^export_version_name=.*/export_version_name=$NEW_NAME/" "$GRADLE_PROPS"
+    sed -i "s/^export_version_code=.*/export_version_code=$NEW_CODE/" "$GRADLE_PROPS"
+    echo "Version: $CURRENT_NAME ($CURRENT_CODE) -> $NEW_NAME ($NEW_CODE)"
+fi
 
 # 4. Build APK
 echo "Building APK..."

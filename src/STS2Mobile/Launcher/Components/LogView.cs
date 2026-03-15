@@ -8,7 +8,7 @@ public class LogView : RichTextLabel
     {
         CustomMinimumSize = new Vector2(0, (int)(120 * scale));
         ScrollFollowing = true;
-        BbcodeEnabled = false;
+        BbcodeEnabled = true;
         AddThemeFontSizeOverride("normal_font_size", (int)(11 * scale));
         AddThemeColorOverride("default_color", new Color(0.6f, 0.6f, 0.65f));
 
@@ -23,4 +23,11 @@ public class LogView : RichTextLabel
     }
 
     public void AppendLog(string msg) => AddText(msg + "\n");
+
+    public void AppendColoredLog(string msg, Color color)
+    {
+        PushColor(color);
+        AddText(msg + "\n");
+        Pop();
+    }
 }

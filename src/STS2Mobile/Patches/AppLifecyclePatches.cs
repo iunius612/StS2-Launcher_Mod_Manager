@@ -2,12 +2,12 @@ using System;
 using System.Reflection;
 using Godot;
 using HarmonyLib;
+using STS2Mobile.Steam;
 
 namespace STS2Mobile.Patches;
 
-// Handles app backgrounding and foregrounding on mobile. Pauses the scene tree
-// and mutes all audio when the app loses focus, then restores state and opens
-// the pause menu on resume so the player can re-orient before gameplay continues.
+// Handles app backgrounding and foregrounding. Mutes audio, pauses the scene
+// tree, flushes cloud writes on background. Opens the pause menu on resume.
 public static class AppLifecyclePatches
 {
     public static void Apply(Harmony harmony)
@@ -37,9 +37,16 @@ public static class AppLifecyclePatches
                 )
             );
         }
+
+        // Redirect NGame.Quit to restart the app instead of force-killing the process.
+        PatchHelper.Patch(
+            harmony,
+            typeof(MegaCrit.Sts2.Core.Nodes.NGame),
+            "Quit",
+            prefix: PatchHelper.Method(typeof(AppLifecyclePatches), nameof(QuitPrefix))
+        );
     }
 
-    // Mutes FMOD and Godot audio, then pauses the scene tree.
     public static void EnterBackgroundPostfix(object __instance)
     {
         try
@@ -71,6 +78,17 @@ public static class AppLifecyclePatches
 
             var node = (Node)__instance;
             node.GetTree().Paused = true;
+
+            // Flush pending cloud writes before the OS may kill the process
+            try
+            {
+                SteamKit2CloudSaveStore.Instance?.Flush(5000);
+            }
+            catch (Exception ex)
+            {
+                PatchHelper.Log($"Cloud flush on background failed: {ex.Message}");
+            }
+
             PatchHelper.Log("App backgrounded: audio muted, SceneTree paused");
         }
         catch (Exception ex)
@@ -79,8 +97,7 @@ public static class AppLifecyclePatches
         }
     }
 
-    // Unpauses the scene tree, restores audio, resets FPS cap, and opens the
-    // pause menu so the player has a moment before gameplay resumes.
+    // Opens the pause menu on resume so the player can re-orient before gameplay continues.
     public static bool ExitBackgroundPrefix(object __instance)
     {
         try
@@ -91,7 +108,7 @@ public static class AppLifecyclePatches
             if (!tree.Paused)
                 return true;
 
-            // Open pause menu while the tree is still paused
+            // Show pause menu while tree is still paused so it renders on the first visible frame
             try
             {
                 var nGameInstance = MegaCrit.Sts2.Core.Nodes.NGame.Instance;
@@ -164,7 +181,7 @@ public static class AppLifecyclePatches
 
             tree.Paused = false;
 
-            // Restore FMOD and Godot audio to saved volume levels
+            // Restore FMOD and Godot audio to user's saved volume levels
             int masterBus = AudioServer.GetBusIndex("Master");
             AudioServer.SetBusMute(masterBus, false);
             try
@@ -201,7 +218,6 @@ public static class AppLifecyclePatches
 
             PatchHelper.Log("App resumed: SceneTree unpaused, audio restored");
 
-            // Restore the FPS cap that was lowered during backgrounding
             var isBackgroundedField = AccessTools.Field(__instance.GetType(), "_isBackgrounded");
             var savedFpsField = AccessTools.Field(__instance.GetType(), "_savedMaxFps");
 
@@ -216,6 +232,32 @@ public static class AppLifecyclePatches
         catch (Exception ex)
         {
             PatchHelper.Log($"ExitBackgroundPrefix failed: {ex.Message}");
+            return true;
+        }
+    }
+
+    // Replaces the default quit (force-kill) with a clean app restart via GodotApp.
+    // Saves are already written by the original Quit() callers before this runs.
+    public static bool QuitPrefix(object __instance)
+    {
+        try
+        {
+            try
+            {
+                SteamKit2CloudSaveStore.Instance?.Flush(5000);
+            }
+            catch { }
+
+            PatchHelper.Log("NGame.Quit intercepted, restarting app");
+            var jcw = Engine.GetSingleton("JavaClassWrapper");
+            var wrapper = (GodotObject)jcw.Call("wrap", "com.game.sts2launcher.GodotApp");
+            var godotApp = (GodotObject)wrapper.Call("getInstance");
+            godotApp.Call("restartApp");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            PatchHelper.Log($"QuitPrefix failed, falling back to default: {ex.Message}");
             return true;
         }
     }
