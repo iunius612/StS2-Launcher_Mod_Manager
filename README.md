@@ -1,8 +1,32 @@
-# StS2 Launcher
+# StS2 Launcher (Mod Manager Fork)
 
 An Android launcher for Slay the Spire 2, built on a custom Godot 4.5.1 engine with .NET/Mono and Harmony runtime patching.
 
+> **Fork notice**: This is a community fork of [Ekyso/StS2-Launcher](https://github.com/Ekyso/StS2-Launcher). The upstream launcher's mod loader stopped working with recent game builds; this fork fixes that and adds a few mobile-UX tweaks. See **[Fork changes](#fork-changes-v021)** below.
+
 > **Disclaimer**: This is an unofficial community project. Slay the Spire 2 is developed and published by Mega Crit Games. A valid Steam account that owns Slay the Spire 2 is required. Game files are downloaded directly from Steam after authentication. No game assets are included in this repository.
+
+## Fork changes (v0.2.1)
+
+Versioned as **0.2.1 (versionCode 201)** so the APK installs cleanly over the official 0.2.0 with `adb install -r` — the 3GB game payload, saves, and credentials are preserved as long as the APK keystore signature matches.
+
+1. **Mods load on current game versions.** The upstream reflection-based `ModLoaderPatches` (scanning after `ModManager.Initialize`) crashed with `NullReferenceException` on current game builds because the private field names it touched were renamed. This fork replaces the approach with a Harmony IL transpiler that rewrites `Path.Combine(..., "mods")` inside `ModManager.Initialize` itself, so the game's own recursive scanner walks `/storage/emulated/0/StS2Launcher/Mods/`. The Steam-only mod enumerator (`ReadSteamMods`) is also short-circuited because Android has no Steamworks runtime.
+2. **Foldable UX.** `android:resizeableActivity="true"` so folding/unfolding triggers a smooth resize instead of Samsung's "Reopen app" prompt (see issue #1).
+3. **Back-button guard.** A stray back swipe no longer instantly restarts the launcher and drops your in-progress run — the first press shows a "Press back again to exit" toast, and only a second press within 2 seconds propagates.
+
+## Installing mods
+
+> **Heads up**: the "MOD MANAGER" button beneath PLAY on the login screen is a **TBD / work-in-progress UI**. The in-launcher SAF import flow is not wired up yet, so use the manual file-manager method below until it is.
+
+1. Grant the launcher "All files access" on first run when it prompts. Once granted, the launcher creates `/storage/emulated/0/StS2Launcher/Mods/` on its own.
+2. Install any Android file manager that can browse internal storage — Material Files, Solid Explorer, FE File Explorer, Samsung's built-in **내 파일**, etc.
+3. Navigate to `/storage/emulated/0/StS2Launcher/Mods/` and drop each mod as its own subfolder. A valid mod folder contains the mod's `.dll`, optional `.pck`, and a `<ModId>.json` manifest at its root — the same layout PC users paste into `Steam\steamapps\common\Slay the Spire 2\mods\`.
+
+   ![Mods folder layout](docs/images/mods_folder.jpg)
+
+4. Launch the game and tap PLAY. When the game's built-in "Load mods?" dialog appears, tap **OK** — the game will save the choice, restart through the launcher once, and come back up with mods loaded.
+
+If no mods appear, check `adb logcat | grep "\[Mods\]"` — successful scans log `Redirected ModManager.Initialize to /storage/emulated/0/StS2Launcher/Mods`.
 
 ## Features
 

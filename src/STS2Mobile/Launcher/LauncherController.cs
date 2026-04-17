@@ -14,6 +14,10 @@ public class LauncherController
     private readonly LauncherView _view;
     private readonly Action<Action> _runOnMainThread;
     private volatile bool _checkingForUpdates;
+    private bool _launchStageShown;
+    private string _lastLaunchText = "LAUNCH";
+    private bool _lastShowCloudSync;
+    private bool _lastShowUpdate;
 
     public LauncherController(
         LauncherModel model,
@@ -59,7 +63,7 @@ public class LauncherController
                 if (LauncherModel.GameFilesReady())
                 {
                     var text = _model.InGameMode ? "PLAY" : "RESTART APP";
-                    _view.Actions.ShowLaunch(text, showCloudSync: false, showUpdate: false);
+                    ShowLaunchStage(text, showCloudSync: false, showUpdate: false);
                 }
                 else
                     _view.Actions.ShowRetry();
@@ -114,6 +118,8 @@ public class LauncherController
         _view.Actions.CloudPushPressed += OnCloudPushPressed;
         _view.Actions.CloudPullPressed += OnCloudPullPressed;
         _view.Actions.CheckForUpdatesPressed += OnCheckForUpdatesPressed;
+        _view.ModManagerButton.Pressed += OnModManagerPressed;
+        _view.ModManager.BackPressed += OnModManagerBackPressed;
 
         var localBackupPref = LauncherModel.LoadLocalBackupPref();
         _view.Actions.SetLocalBackupChecked(localBackupPref);
@@ -128,12 +134,13 @@ public class LauncherController
 
     private void HandleFastPath(FastPathResult result)
     {
+        PatchHelper.Log($"[Mods] HandleFastPath result={result}");
         switch (result)
         {
             case FastPathResult.ReadyToLaunch:
                 _view.SetStatus($"Welcome back, {_model.AccountName}");
                 var text = _model.InGameMode ? "PLAY" : "RESTART APP";
-                _view.Actions.ShowLaunch(text, showCloudSync: true, showUpdate: true);
+                ShowLaunchStage(text, showCloudSync: true, showUpdate: true);
                 break;
 
             case FastPathResult.AutoConnect:
@@ -142,12 +149,58 @@ public class LauncherController
                 break;
 
             case FastPathResult.ShowLogin:
-                _view.SetStatus("Enter your Steam credentials");
-                _view.Login.Visible = true;
-                _view.Login.SetDisabled(false);
+                ShowLoginStage("Enter your Steam credentials");
                 break;
         }
     }
+
+    private void ShowLoginStage(string status)
+    {
+        _view.SetStatus(status);
+        _view.Login.Visible = true;
+        _view.Login.SetDisabled(false);
+    }
+
+    private void ShowLaunchStage(string text, bool showCloudSync, bool showUpdate)
+    {
+        PatchHelper.Log($"[Mods] ShowLaunchStage fired (text='{text}', inGameMode={_model.InGameMode})");
+        _launchStageShown = true;
+        _lastLaunchText = text;
+        _lastShowCloudSync = showCloudSync;
+        _lastShowUpdate = showUpdate;
+        _view.Actions.ShowLaunch(text, showCloudSync, showUpdate);
+        _view.ModManagerButton.Visible = true;
+    }
+
+    private void OnModManagerPressed()
+    {
+        PatchHelper.Log("[Mods] Mod Manager button tapped");
+        _view.SetStatus("Mod Manager");
+        _view.ShowModManager();
+    }
+
+    public void OnModManagerBackPressed()
+    {
+        PatchHelper.Log($"[Mods] Back pressed (launchStageShown={_launchStageShown}, sessionState={_model.SessionState})");
+        // Must hide mod manager first, otherwise UpdateUI's ModManager.Visible guard
+        // refuses to redraw — that was making BACK a no-op.
+        _view.ModManager.Visible = false;
+        _view.ModManagerButton.Visible = false;
+
+        // Fast path (ReadyToLaunch) shows the launch UI without changing SessionState,
+        // so we can't rely on SessionState==LoggedIn to know if we were on the launch screen.
+        if (_launchStageShown)
+        {
+            _view.SetStatus($"Welcome back, {_model.AccountName}");
+            ShowLaunchStage(_lastLaunchText, _lastShowCloudSync, _lastShowUpdate);
+        }
+        else
+        {
+            ShowLoginStage("Enter your Steam credentials");
+        }
+    }
+
+    public bool IsModManagerOpen => _view.ModManager.Visible;
 
     private async void StartConnectionTimeout()
     {
@@ -171,7 +224,7 @@ public class LauncherController
                     _view.SetStatus("No connection — saved credentials will be used");
                     _view.AppendLog("Connection timed out. Valid ownership marker found.");
                     var text = _model.InGameMode ? "PLAY" : "RESTART APP";
-                    _view.Actions.ShowLaunch(text, showCloudSync: true, showUpdate: false);
+                    ShowLaunchStage(text, showCloudSync: true, showUpdate: false);
                 });
             }
             else
@@ -205,6 +258,9 @@ public class LauncherController
         if (state == SessionState.Disconnected && _model.ConnectionResolved)
             return;
 
+        if (_view.ModManager.Visible)
+            return;
+
         _view.HideAllSections();
 
         switch (state)
@@ -214,9 +270,7 @@ public class LauncherController
                 break;
 
             case SessionState.WaitingForCredentials:
-                _view.SetStatus("Enter your Steam credentials");
-                _view.Login.Visible = true;
-                _view.Login.SetDisabled(false);
+                ShowLoginStage("Enter your Steam credentials");
                 break;
 
             case SessionState.Authenticating:
@@ -233,7 +287,7 @@ public class LauncherController
                 if (LauncherModel.GameFilesReady())
                 {
                     var text = _model.InGameMode ? "PLAY" : "RESTART APP";
-                    _view.Actions.ShowLaunch(text, showCloudSync: true, showUpdate: true);
+                    ShowLaunchStage(text, showCloudSync: true, showUpdate: true);
                 }
                 else
                 {
@@ -244,15 +298,11 @@ public class LauncherController
 
             case SessionState.Failed:
                 _model.ConnectionResolved = true;
-                _view.SetStatus($"Error: {_model.FailReason}");
-                _view.Login.Visible = true;
-                _view.Login.SetDisabled(false);
+                ShowLoginStage($"Error: {_model.FailReason}");
                 break;
 
             case SessionState.Disconnected:
-                _view.SetStatus("Enter your Steam credentials");
-                _view.Login.Visible = true;
-                _view.Login.SetDisabled(false);
+                ShowLoginStage("Enter your Steam credentials");
                 break;
         }
     }

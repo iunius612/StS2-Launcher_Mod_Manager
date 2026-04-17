@@ -38,6 +38,7 @@ venv/
 
 # Logs
 logs.txt
+*.logcat
 
 # Hidden directories
 .*

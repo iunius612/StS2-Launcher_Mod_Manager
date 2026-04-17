@@ -129,7 +129,9 @@ public class ShaderWarmupScreen : Control
             if (materials.Count == 0)
             {
                 WriteVersionMarker();
-                _tcs?.TrySetResult(true);
+                // Static type initializers (e.g. NPotionHolder) poisoned by early LocString access
+                // can't be retried in-process; restart to get a clean AppDomain.
+                LauncherModel.GetGodotApp()?.Call("restartApp");
                 return;
             }
 
@@ -201,7 +203,9 @@ public class ShaderWarmupScreen : Control
             PatchHelper.Log($"[ShaderWarmup] Failed: {ex}");
         }
 
-        _tcs?.TrySetResult(true);
+        // Restart to get a clean AppDomain so GameStartup() runs with fresh type initializers.
+        // See the early-return branch above for the rationale.
+        LauncherModel.GetGodotApp()?.Call("restartApp");
     }
 
     private static Node CreateWarmupNode(Material mat, ImageTexture whiteTex)

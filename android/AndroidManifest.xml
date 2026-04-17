@@ -51,7 +51,7 @@
       android:screenOrientation="landscape"
       android:windowSoftInputMode="adjustResize"
       android:configChanges="layoutDirection|locale|orientation|keyboardHidden|screenSize|smallestScreenSize|density|keyboard|navigation|screenLayout|uiMode"
-      android:resizeableActivity="false"
+      android:resizeableActivity="true"
       tools:ignore="UnusedAttribute"
     >
       <intent-filter>

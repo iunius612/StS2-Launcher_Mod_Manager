@@ -13,6 +13,8 @@ public class LauncherView
     public CodeSection Code { get; }
     public DownloadSection Download { get; }
     public ActionSection Actions { get; }
+    public ModManagerSection ModManager { get; }
+    public StyledButton ModManagerButton { get; }
     public LogView Log { get; }
 
     private readonly StyledLabel _statusLabel;
@@ -75,6 +77,15 @@ public class LauncherView
         Actions = new ActionSection(scale);
         left.AddChild(Actions);
 
+        ModManager = new ModManagerSection(scale);
+        ModManager.ConfirmationRequested += (message, onOk, onCancel) =>
+            ShowConfirmation(message, onOk, onCancel);
+        left.AddChild(ModManager);
+
+        ModManagerButton = new StyledButton("MOD MANAGER", scale, fontSize: 14, height: 40);
+        ModManagerButton.Visible = false;
+        left.AddChild(ModManagerButton);
+
         // FMOD attribution (required by FMOD EULA).
         var fmodContainer = new VBoxContainer();
         fmodContainer.SizeFlagsVertical = Control.SizeFlags.ExpandFill;
@@ -122,6 +133,15 @@ public class LauncherView
         Code.Visible = false;
         Download.Visible = false;
         Actions.HideAll();
+        ModManager.Visible = false;
+        ModManagerButton.Visible = false;
+    }
+
+    public void ShowModManager()
+    {
+        HideAllSections();
+        ModManager.Visible = true;
+        ModManager.Refresh();
     }
 
     public void UpdateKeyboardOffset()
@@ -172,10 +192,12 @@ public class LauncherView
         }
     }
 
-    public void ShowConfirmation(string message, Action onConfirmed)
+    public void ShowConfirmation(string message, Action onConfirmed, Action onCancelled = null)
     {
         var dialog = new StyledDialog(message, _scale);
         dialog.Confirmed += onConfirmed;
+        if (onCancelled != null)
+            dialog.Cancelled += onCancelled;
         _parent.AddChild(dialog);
     }
 

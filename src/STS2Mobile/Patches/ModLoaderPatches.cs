@@ -1,69 +1,67 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.Reflection;
-using Godot;
+using System.Reflection.Emit;
 using HarmonyLib;
 using MegaCrit.Sts2.Core.Modding;
 
 namespace STS2Mobile.Patches;
 
-// Extends ModManager to scan an external mods directory on Android so users
-// can sideload mods to /storage/emulated/0/StS2Launcher/Mods/ without root.
+// Redirects the game's built-in mod loader to scan AppPaths.ExternalModsDir
+// (/storage/emulated/0/StS2Launcher/Mods) instead of the "mods" folder next to
+// the game executable. A Harmony transpiler rewrites the relevant IL inside
+// ModManager.Initialize so the game's own recursive scanner walks our path;
+// the Steam-only enumerator is short-circuited because Android has no
+// Steamworks runtime.
 public static class ModLoaderPatches
 {
-    private static readonly BindingFlags AllStatic =
-        BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
-
     public static void Apply(Harmony harmony)
     {
         PatchHelper.Patch(
             harmony,
             typeof(ModManager),
             "Initialize",
-            postfix: PatchHelper.Method(typeof(ModLoaderPatches), nameof(InitializePostfix))
+            transpiler: PatchHelper.Method(typeof(ModLoaderPatches), nameof(InitializeTranspiler))
+        );
+        PatchHelper.Patch(
+            harmony,
+            typeof(ModManager),
+            "ReadSteamMods",
+            prefix: PatchHelper.Method(typeof(ModLoaderPatches), nameof(ReadSteamModsPrefix))
         );
     }
 
-    // Runs after the original Initialize() to pick up mods from external storage.
-    // Temporarily clears _initialized so TryLoadModFromPck accepts new entries.
-    public static void InitializePostfix()
+    // Rewrites `Path.Combine(directoryName, "mods")` inside ModManager.Initialize
+    // to push AppPaths.ExternalModsDir directly. No reflection on private fields,
+    // so the patch survives rebuilds that rename backing fields.
+    public static IEnumerable<CodeInstruction> InitializeTranspiler(
+        IEnumerable<CodeInstruction> instructions
+    )
     {
-        try
+        var matcher = new CodeMatcher(instructions)
+            .MatchStartForward(new CodeMatch(OpCodes.Ldstr, "mods"));
+
+        if (matcher.IsValid)
         {
-            using var dirAccess = DirAccess.Open(AppPaths.ExternalModsDir);
-            if (dirAccess == null)
-            {
-                PatchHelper.Log(
-                    $"[Mods] External mods directory not found: {AppPaths.ExternalModsDir} "
-                        + $"(error: {DirAccess.GetOpenError()})"
-                );
-                return;
-            }
-
-            PatchHelper.Log($"[Mods] Scanning external mods: {AppPaths.ExternalModsDir}");
-
-            var initializedField = typeof(ModManager).GetField("_initialized", AllStatic);
-            initializedField.SetValue(null, false);
-
-            var loadMethod = typeof(ModManager).GetMethod("LoadModsInDirRecursive", AllStatic);
-            loadMethod.Invoke(null, new object[] { dirAccess, ModSource.ModsDirectory });
-
-            initializedField.SetValue(null, true);
-
-            // Rebuild _loadedMods to include anything new
-            var modsField = typeof(ModManager).GetField("_mods", AllStatic);
-            var loadedModsField = typeof(ModManager).GetField("_loadedMods", AllStatic);
-            var allMods = (List<Mod>)modsField.GetValue(null);
-            loadedModsField.SetValue(null, allMods.Where(m => m.wasLoaded).ToList());
-
+            // IL pattern is: ldloc directoryName, ldstr "mods", call Path.Combine.
+            // Drop all three and push the external path literal instead.
+            matcher.Advance(-1);
+            matcher.RemoveInstructions(3);
+            matcher.InsertAndAdvance(
+                new CodeInstruction(OpCodes.Ldstr, AppPaths.ExternalModsDir)
+            );
+            PatchHelper.Log($"[Mods] Redirected ModManager.Initialize to {AppPaths.ExternalModsDir}");
+        }
+        else
+        {
             PatchHelper.Log(
-                $"[Mods] External scan complete. Total loaded: {ModManager.LoadedMods.Count}"
+                "[Mods] Warning: could not locate \"mods\" ldstr in ModManager.Initialize; "
+                    + "external mods will be ignored."
             );
         }
-        catch (Exception ex)
-        {
-            PatchHelper.Log($"[Mods] Failed to load external mods: {ex}");
-        }
+
+        return matcher.InstructionEnumeration();
     }
+
+    // Skip the Steam-backed mod enumeration on Android (no Steamworks runtime).
+    public static bool ReadSteamModsPrefix() => false;
 }

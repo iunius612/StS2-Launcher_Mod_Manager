@@ -77,4 +77,10 @@ public class LauncherUI : Control
         GetTree().AutoAcceptQuit = true;
         _model?.Dispose();
     }
+
+    public override void _Notification(int what)
+    {
+        if (what == NotificationWMGoBackRequest && _controller is { IsModManagerOpen: true })
+            _controller.OnModManagerBackPressed();
+    }
 }

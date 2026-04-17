@@ -6,6 +6,8 @@ import org.godotengine.godot.GodotActivity;
 import android.content.Intent;
 import android.os.Bundle;
 import android.util.Log;
+import android.view.KeyEvent;
+import android.widget.Toast;
 
 import androidx.activity.EdgeToEdge;
 import androidx.core.splashscreen.SplashScreen;
@@ -50,6 +52,11 @@ public class GodotApp extends GodotActivity {
 	private static final String TAG = "STS2Mobile";
 	private static final String KEYSTORE_ALIAS = "sts2mobile_credentials";
 	private static final String PCK_FILE = "SlayTheSpire2.pck";
+	private static final int REQ_SAF_ZIP = 4201;
+
+	private volatile boolean pickerActive = false;
+	private final java.util.List<String> lastPickedZipPaths =
+			java.util.Collections.synchronizedList(new java.util.ArrayList<>());
 
 	private final Runnable updateWindowAppearance = () -> {
 		Godot godot = getGodot();
@@ -269,6 +276,51 @@ public class GodotApp extends GodotActivity {
 		updateWindowAppearance.run();
 	}
 
+	private long lastBackPressTimeMs = 0L;
+	private Toast lastBackPressToast;
+	private static final long BACK_PRESS_CONFIRM_WINDOW_MS = 2000L;
+
+	// Intercept the hardware back button before Godot's render view swallows it.
+	// First press shows a toast and is discarded; a second press within 2s is
+	// allowed through so NGame.Quit (and therefore restartApp()) runs. Prevents
+	// accidentally dropping an in-progress run with a stray swipe.
+	@Override
+	public boolean dispatchKeyEvent(KeyEvent event) {
+		if (event.getKeyCode() != KeyEvent.KEYCODE_BACK) {
+			return super.dispatchKeyEvent(event);
+		}
+		long now = System.currentTimeMillis();
+		boolean withinWindow = (now - lastBackPressTimeMs) < BACK_PRESS_CONFIRM_WINDOW_MS;
+
+		if (event.getAction() == KeyEvent.ACTION_DOWN) {
+			// Second press: pass DOWN through so Godot receives the full pair.
+			// First press: swallow DOWN so the render view cannot act on it.
+			return withinWindow ? super.dispatchKeyEvent(event) : true;
+		}
+		if (event.getAction() == KeyEvent.ACTION_UP) {
+			if (withinWindow) {
+				if (lastBackPressToast != null) {
+					lastBackPressToast.cancel();
+					lastBackPressToast = null;
+				}
+				lastBackPressTimeMs = 0L;
+				return super.dispatchKeyEvent(event);
+			}
+			lastBackPressTimeMs = now;
+			if (lastBackPressToast != null) {
+				lastBackPressToast.cancel();
+			}
+			lastBackPressToast = Toast.makeText(
+				this,
+				"Press back again to exit",
+				Toast.LENGTH_SHORT
+			);
+			lastBackPressToast.show();
+			return true;
+		}
+		return super.dispatchKeyEvent(event);
+	}
+
 	@Override
 	public void onGodotMainLoopStarted() {
 		super.onGodotMainLoopStarted();
@@ -395,6 +447,110 @@ public class GodotApp extends GodotActivity {
 			}
 		} else {
 			requestPermissions(new String[] { android.Manifest.permission.WRITE_EXTERNAL_STORAGE }, 1);
+		}
+	}
+
+	// Opens the system document picker (SAF) so the user can select one or more
+	// mod zips from any provider the device exposes (Downloads, Drive, etc.).
+	// The result is handled in onActivityResult; each picked file is copied into
+	// the app cache, and the absolute paths are drained by C# via
+	// consumePickedZipPaths().
+	public void openZipPicker() {
+		Log.i(TAG, "[Mods] openZipPicker invoked from C#");
+		pickerActive = true;
+		lastPickedZipPaths.clear();
+		runOnUiThread(() -> {
+			try {
+				Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+				intent.addCategory(Intent.CATEGORY_OPENABLE);
+				intent.setType("*/*");
+				intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[] {
+						"application/zip",
+						"application/x-zip-compressed",
+						"application/octet-stream"
+				});
+				intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+				Log.i(TAG, "[Mods] Starting SAF ACTION_OPEN_DOCUMENT intent (multi)");
+				startActivityForResult(intent, REQ_SAF_ZIP);
+				Log.i(TAG, "[Mods] startActivityForResult returned");
+			} catch (Exception e) {
+				Log.e(TAG, "[Mods] Failed to start zip picker", e);
+				pickerActive = false;
+			}
+		});
+	}
+
+	public boolean isPickerActive() {
+		return pickerActive;
+	}
+
+	// Returns all copied zip paths as a single newline-separated string and clears
+	// the buffer. Returns empty string when the user cancelled or nothing was picked.
+	public String consumePickedZipPaths() {
+		synchronized (lastPickedZipPaths) {
+			if (lastPickedZipPaths.isEmpty())
+				return "";
+			StringBuilder sb = new StringBuilder();
+			for (int i = 0; i < lastPickedZipPaths.size(); i++) {
+				if (i > 0) sb.append('\n');
+				sb.append(lastPickedZipPaths.get(i));
+			}
+			lastPickedZipPaths.clear();
+			return sb.toString();
+		}
+	}
+
+	// Kept for backward compatibility with any caller that still grabs a single path.
+	public String consumeLastPickedZipPath() {
+		synchronized (lastPickedZipPaths) {
+			if (lastPickedZipPaths.isEmpty())
+				return null;
+			String path = lastPickedZipPaths.remove(0);
+			return path;
+		}
+	}
+
+	@Override
+	protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+		super.onActivityResult(requestCode, resultCode, data);
+		Log.i(TAG, "[Mods] onActivityResult requestCode=" + requestCode + " resultCode=" + resultCode);
+		if (requestCode != REQ_SAF_ZIP) {
+			return;
+		}
+		try {
+			if (resultCode == RESULT_OK && data != null) {
+				java.util.List<android.net.Uri> uris = new java.util.ArrayList<>();
+				android.content.ClipData clip = data.getClipData();
+				if (clip != null) {
+					for (int i = 0; i < clip.getItemCount(); i++) {
+						android.net.Uri u = clip.getItemAt(i).getUri();
+						if (u != null) uris.add(u);
+					}
+				} else if (data.getData() != null) {
+					uris.add(data.getData());
+				}
+				Log.i(TAG, "[Mods] Picked " + uris.size() + " file(s)");
+
+				long ts = System.currentTimeMillis();
+				for (int i = 0; i < uris.size(); i++) {
+					android.net.Uri uri = uris.get(i);
+					File dest = new File(getCacheDir(), "mod_import_" + ts + "_" + i + ".zip");
+					try (InputStream in = getContentResolver().openInputStream(uri);
+							FileOutputStream out = new FileOutputStream(dest)) {
+						byte[] buf = new byte[16384];
+						int len;
+						while ((len = in.read(buf)) > 0) {
+							out.write(buf, 0, len);
+						}
+					}
+					lastPickedZipPaths.add(dest.getAbsolutePath());
+					Log.i(TAG, "[Mods] Mod zip copied to: " + dest.getAbsolutePath());
+				}
+			}
+		} catch (Exception e) {
+			Log.e(TAG, "Failed to read picked zip(s)", e);
+		} finally {
+			pickerActive = false;
 		}
 	}
 

@@ -10,6 +10,7 @@ public static class AppPaths
     private const string ExternalRoot = "/storage/emulated/0/StS2Launcher";
     public const string ExternalModsDir = ExternalRoot + "/Mods";
     public const string ExternalSaveBackupsDir = ExternalRoot + "/Saves";
+    public const string ExternalModConfigFile = ExternalModsDir + "/mod_config.json";
 
     // Returns true if the app has permission to write to shared external storage.
     public static bool HasStoragePermission()
