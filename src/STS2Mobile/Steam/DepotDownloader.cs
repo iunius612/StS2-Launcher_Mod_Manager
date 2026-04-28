@@ -57,34 +57,15 @@ public class DepotDownloader : IDisposable
     }
 
     // Returns true if any depot has a newer manifest than what's cached locally.
-    public async Task<bool> CheckForUpdatesAsync(CancellationToken ct = default)
+    public async Task<bool> CheckForUpdatesAsync(string branch = "public", CancellationToken ct = default)
     {
         _connection.SuspendIdleTimeout();
         try
         {
             Directory.CreateDirectory(_stateDir);
 
-            ulong accessToken = _connection.AppAccessToken;
-            var infoResult = await _connection.Apps.PICSGetProductInfo(
-                new[] { new SteamApps.PICSRequest(AppId, accessToken) },
-                Enumerable.Empty<SteamApps.PICSRequest>()
-            );
-
-            SteamApps.PICSProductInfoCallback.PICSProductInfo appInfo = null;
-            foreach (var cb in infoResult.Results)
-            {
-                if (cb.Apps.TryGetValue(AppId, out var info))
-                {
-                    appInfo = info;
-                    break;
-                }
-            }
-
-            if (appInfo == null)
-                throw new Exception("Failed to get app info from Steam");
-
-            _appInfoCache[AppId] = appInfo;
-            var depots = await ParseDepotsAsync(appInfo.KeyValues["depots"]);
+            var appInfo = await FetchAppInfoAsync();
+            var depots = await ParseDepotsAsync(appInfo.KeyValues["depots"], branch);
 
             foreach (var (depotId, manifestId) in depots)
             {
@@ -105,7 +86,7 @@ public class DepotDownloader : IDisposable
         }
     }
 
-    public async Task DownloadAsync(CancellationToken ct = default)
+    public async Task DownloadAsync(string branch = "public", CancellationToken ct = default)
     {
         _connection.SuspendIdleTimeout();
         try
@@ -113,30 +94,10 @@ public class DepotDownloader : IDisposable
             Directory.CreateDirectory(_gameDir);
             Directory.CreateDirectory(_stateDir);
 
-            Log("Fetching app info...");
-
-            ulong accessToken = _connection.AppAccessToken;
-            var infoResult = await _connection.Apps.PICSGetProductInfo(
-                new[] { new SteamApps.PICSRequest(AppId, accessToken) },
-                Enumerable.Empty<SteamApps.PICSRequest>()
-            );
-
-            SteamApps.PICSProductInfoCallback.PICSProductInfo appInfo = null;
-            foreach (var cb in infoResult.Results)
-            {
-                if (cb.Apps.TryGetValue(AppId, out var info))
-                {
-                    appInfo = info;
-                    break;
-                }
-            }
-
-            if (appInfo == null)
-                throw new Exception("Failed to get app info from Steam");
-
-            _appInfoCache[AppId] = appInfo;
+            Log($"Fetching app info (branch={branch})...");
+            var appInfo = await FetchAppInfoAsync();
             var depotSection = appInfo.KeyValues["depots"];
-            var depots = await ParseDepotsAsync(depotSection);
+            var depots = await ParseDepotsAsync(depotSection, branch);
             if (depots.Count == 0)
                 throw new Exception("No downloadable depots found");
 
@@ -161,7 +122,7 @@ public class DepotDownloader : IDisposable
             foreach (var (depotId, manifestId) in depots)
             {
                 ct.ThrowIfCancellationRequested();
-                await DownloadDepotAsync(depotId, manifestId, ct);
+                await DownloadDepotAsync(depotId, manifestId, branch, ct);
             }
 
             Log("All game files downloaded!");
@@ -175,8 +136,91 @@ public class DepotDownloader : IDisposable
         }
     }
 
+    // Returns the list of public branches advertised in the app's depot KV tree.
+    // Re-uses the cached PICSProductInfo when possible so this is cheap to call
+    // from the launcher UI before deciding which branch to download.
+    public async Task<List<SteamBranchInfo>> EnumerateBranchesAsync(CancellationToken ct = default)
+    {
+        _connection.SuspendIdleTimeout();
+        try
+        {
+            var appInfo = await FetchAppInfoAsync();
+            var branchesSection = appInfo.KeyValues["depots"]["branches"];
+            var result = new List<SteamBranchInfo>();
+            if (branchesSection == KeyValue.Invalid)
+                return result;
+
+            foreach (var node in branchesSection.Children)
+            {
+                ct.ThrowIfCancellationRequested();
+                if (string.IsNullOrEmpty(node.Name))
+                    continue;
+
+                var info = new SteamBranchInfo
+                {
+                    Name = node.Name,
+                    Description = node["description"]?.Value ?? "",
+                    BuildId = node["buildid"]?.Value ?? "",
+                    IsPasswordProtected = node["pwdrequired"]?.Value == "1",
+                };
+
+                if (
+                    node["timeupdated"]?.Value is string ts
+                    && long.TryParse(ts, out var unix)
+                )
+                {
+                    info.TimeUpdatedUtc = DateTimeOffset.FromUnixTimeSeconds(unix).UtcDateTime;
+                }
+
+                result.Add(info);
+            }
+
+            // Public branch first, then most recently updated.
+            result.Sort(
+                (a, b) =>
+                {
+                    if (a.Name == "public" && b.Name != "public")
+                        return -1;
+                    if (b.Name == "public" && a.Name != "public")
+                        return 1;
+                    return b.TimeUpdatedUtc.CompareTo(a.TimeUpdatedUtc);
+                }
+            );
+
+            return result;
+        }
+        finally
+        {
+            _connection.ResumeIdleTimeout();
+        }
+    }
+
+    private async Task<SteamApps.PICSProductInfoCallback.PICSProductInfo> FetchAppInfoAsync()
+    {
+        if (_appInfoCache.TryGetValue(AppId, out var cached))
+            return cached;
+
+        ulong accessToken = _connection.AppAccessToken;
+        var infoResult = await _connection.Apps.PICSGetProductInfo(
+            new[] { new SteamApps.PICSRequest(AppId, accessToken) },
+            Enumerable.Empty<SteamApps.PICSRequest>()
+        );
+
+        foreach (var cb in infoResult.Results)
+        {
+            if (cb.Apps.TryGetValue(AppId, out var info))
+            {
+                _appInfoCache[AppId] = info;
+                return info;
+            }
+        }
+
+        throw new Exception("Failed to get app info from Steam");
+    }
+
     private async Task<List<(uint DepotId, ulong ManifestId)>> ParseDepotsAsync(
-        KeyValue depotSection
+        KeyValue depotSection,
+        string branch
     )
     {
         var result = new List<(uint, ulong)>();
@@ -225,14 +269,18 @@ public class DepotDownloader : IDisposable
                     continue;
             }
 
-            var gidNode = manifests["public"]["gid"];
+            // Some depots only define a public manifest even on beta branches —
+            // fall back to public so those depots aren't dropped from the download.
+            var gidNode = manifests[branch]["gid"];
+            if (gidNode == KeyValue.Invalid || gidNode.Value == null)
+                gidNode = manifests["public"]["gid"];
             if (gidNode == KeyValue.Invalid || gidNode.Value == null)
                 continue;
 
             if (!ulong.TryParse(gidNode.Value, out var manifestId))
                 continue;
 
-            Log($"Found depot {depotId} manifest {manifestId}");
+            Log($"Found depot {depotId} manifest {manifestId} (branch={branch})");
             result.Add((depotId, manifestId));
         }
 
@@ -292,7 +340,11 @@ public class DepotDownloader : IDisposable
         return null;
     }
 
-    private async Task<ulong> GetManifestRequestCodeAsync(uint depotId, ulong manifestId)
+    private async Task<ulong> GetManifestRequestCodeAsync(
+        uint depotId,
+        ulong manifestId,
+        string branch
+    )
     {
         if (
             _manifestRequestCodes.TryGetValue(depotId, out var cached)
@@ -306,7 +358,7 @@ public class DepotDownloader : IDisposable
             depotId,
             AppId,
             manifestId,
-            "public"
+            branch
         );
         if (code == 0)
             throw new Exception(
@@ -318,7 +370,12 @@ public class DepotDownloader : IDisposable
         return code;
     }
 
-    private async Task DownloadDepotAsync(uint depotId, ulong manifestId, CancellationToken ct)
+    private async Task DownloadDepotAsync(
+        uint depotId,
+        ulong manifestId,
+        string branch,
+        CancellationToken ct
+    )
     {
         Log($"Processing depot {depotId}...");
 
@@ -329,7 +386,7 @@ public class DepotDownloader : IDisposable
             throw new Exception($"Failed to get depot key for {depotId}: {keyResult.Result}");
         var depotKey = keyResult.DepotKey;
 
-        var manifestRequestCode = await GetManifestRequestCodeAsync(depotId, manifestId);
+        var manifestRequestCode = await GetManifestRequestCodeAsync(depotId, manifestId, branch);
 
         Log($"Downloading manifest for depot {depotId}...");
         DepotManifest manifest = null;

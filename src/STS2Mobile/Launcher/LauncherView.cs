@@ -1,7 +1,9 @@
 using System;
+using System.Collections.Generic;
 using Godot;
 using STS2Mobile.Launcher.Components;
 using STS2Mobile.Launcher.Sections;
+using STS2Mobile.Steam;
 
 namespace STS2Mobile.Launcher;
 
@@ -196,6 +198,20 @@ public class LauncherView
     {
         var dialog = new StyledDialog(message, _scale);
         dialog.Confirmed += onConfirmed;
+        if (onCancelled != null)
+            dialog.Cancelled += onCancelled;
+        _parent.AddChild(dialog);
+    }
+
+    public void ShowBranchPicker(
+        IReadOnlyList<SteamBranchInfo> branches,
+        string currentBranch,
+        Action<string> onConfirmed,
+        Action onCancelled = null
+    )
+    {
+        var dialog = new BranchPickerDialog(branches, currentBranch, _scale);
+        dialog.BranchConfirmed += onConfirmed;
         if (onCancelled != null)
             dialog.Cancelled += onCancelled;
         _parent.AddChild(dialog);

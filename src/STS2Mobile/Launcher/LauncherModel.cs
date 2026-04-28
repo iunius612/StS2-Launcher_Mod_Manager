@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -94,7 +95,9 @@ public class LauncherModel : IDisposable
             $"[Launcher] Fast path: creds={_credentialStore.HasCredentials}, marker={hasMarker}"
         );
 
-        if (_credentialStore.HasCredentials && hasMarker)
+        // Even with a valid marker, refuse the fast path if the PCK isn't on
+        // disk — otherwise PLAY would launch into a broken game.
+        if (_credentialStore.HasCredentials && hasMarker && GameFilesReady())
             return FastPathResult.ReadyToLaunch;
 
         if (_credentialStore.HasCredentials)
@@ -210,7 +213,7 @@ public class LauncherModel : IDisposable
         }
     }
 
-    public async Task StartDownloadAsync()
+    public async Task StartDownloadAsync(string branch = null)
     {
         await EnsureConnectedAsync();
         if (_state != SessionState.LoggedIn || _connection == null)
@@ -225,10 +228,11 @@ public class LauncherModel : IDisposable
         _downloader.ProgressChanged += p => DownloadProgressChanged?.Invoke(p);
 
         _downloadCts = new CancellationTokenSource();
+        var resolvedBranch = branch ?? LoadSelectedBranch();
 
         try
         {
-            await Task.Run(() => _downloader.DownloadAsync(_downloadCts.Token));
+            await Task.Run(() => _downloader.DownloadAsync(resolvedBranch, _downloadCts.Token));
             DownloadCompleted?.Invoke();
         }
         catch (OperationCanceledException)
@@ -242,7 +246,7 @@ public class LauncherModel : IDisposable
         }
     }
 
-    public async Task CheckForUpdatesAsync()
+    public async Task CheckForUpdatesAsync(string branch = null)
     {
         try
         {
@@ -255,8 +259,11 @@ public class LauncherModel : IDisposable
 
             var downloader = new DepotDownloader(_connection, _dataDir);
             downloader.LogMessage += msg => DownloadLogReceived?.Invoke(msg);
+            var resolvedBranch = branch ?? LoadSelectedBranch();
 
-            bool hasUpdate = await Task.Run(() => downloader.CheckForUpdatesAsync());
+            bool hasUpdate = await Task.Run(
+                () => downloader.CheckForUpdatesAsync(resolvedBranch)
+            );
             downloader.Dispose();
 
             UpdateCheckCompleted?.Invoke(hasUpdate);
@@ -264,6 +271,24 @@ public class LauncherModel : IDisposable
         catch (Exception ex)
         {
             UpdateCheckFailed?.Invoke(ex.Message);
+        }
+    }
+
+    public async Task<List<SteamBranchInfo>> ListBranchesAsync()
+    {
+        await EnsureConnectedAsync();
+        if (_state != SessionState.LoggedIn || _connection == null)
+            throw new Exception("Not connected to Steam");
+
+        var downloader = new DepotDownloader(_connection, _dataDir);
+        downloader.LogMessage += msg => DownloadLogReceived?.Invoke(msg);
+        try
+        {
+            return await Task.Run(() => downloader.EnumerateBranchesAsync());
+        }
+        finally
+        {
+            downloader.Dispose();
         }
     }
 
@@ -412,6 +437,56 @@ public class LauncherModel : IDisposable
             File.WriteAllText(CloudSyncPrefPath, enabled ? "true" : "false");
         }
         catch { }
+    }
+
+    private static string SelectedBranchPath => Path.Combine(OS.GetDataDir(), "selected_branch");
+
+    public static string LoadSelectedBranch()
+    {
+        try
+        {
+            if (File.Exists(SelectedBranchPath))
+            {
+                var name = File.ReadAllText(SelectedBranchPath).Trim();
+                if (!string.IsNullOrEmpty(name))
+                    return name;
+            }
+        }
+        catch { }
+        return "public";
+    }
+
+
+    public static void SaveSelectedBranch(string branch)
+    {
+        try
+        {
+            File.WriteAllText(SelectedBranchPath, string.IsNullOrEmpty(branch) ? "public" : branch);
+        }
+        catch { }
+    }
+
+    // Wipes the downloaded game files and the cached manifest state. Called when
+    // the user switches Steam branches: the existing delta-update path occasionally
+    // produces visually broken installs (e.g. card art mismatches) when going from
+    // public ↔ public-beta, so a branch switch always pulls every file fresh.
+    // Login, saves, and the ownership marker are kept untouched.
+    public void WipeGameFiles()
+    {
+        try
+        {
+            var gameDir = Path.Combine(_dataDir, "game");
+            var stateDir = Path.Combine(_dataDir, "download_state");
+            if (Directory.Exists(gameDir))
+                Directory.Delete(gameDir, recursive: true);
+            if (Directory.Exists(stateDir))
+                Directory.Delete(stateDir, recursive: true);
+            PatchHelper.Log("[Launcher] Game files wiped for branch switch");
+        }
+        catch (Exception ex)
+        {
+            PatchHelper.Log($"[Launcher] WipeGameFiles failed: {ex.Message}");
+        }
     }
 
     public static GodotObject GetGodotApp()

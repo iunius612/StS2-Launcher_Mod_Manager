@@ -72,6 +72,7 @@ public static class ModEntry
             TouchInputPatches.Apply(_harmony);
             CardRewardPatches.Apply(_harmony);
             EarlyAccessDisclaimerPatches.Apply(_harmony);
+            FeedbackScreenPatches.Apply(_harmony);
             CombatBackgroundPatches.Apply(_harmony);
             LanMultiplayerPatcher.Apply(_harmony);
             ModLoaderPatches.Apply(_harmony);

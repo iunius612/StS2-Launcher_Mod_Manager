@@ -130,6 +130,36 @@ public class LauncherController
 
         var result = _model.StartSession();
         HandleFastPath(result);
+        MaybePromptStoragePermission();
+    }
+
+    // Asks once, on first launch, for "All Files Access". Mods, save backup, and
+    // future launcher features all live under /storage/emulated/0/StS2Launcher/,
+    // so we surface the request up front instead of hiding it inside the (still
+    // WIP) Mod Manager flow. A marker file ensures we never re-prompt.
+    private void MaybePromptStoragePermission()
+    {
+        if (AppPaths.HasStoragePermission())
+            return;
+
+        var markerPath = System.IO.Path.Combine(
+            OS.GetDataDir(),
+            "storage_permission_prompted"
+        );
+        if (System.IO.File.Exists(markerPath))
+            return;
+
+        try
+        {
+            System.IO.File.WriteAllText(markerPath, "1");
+        }
+        catch { }
+
+        _view.ShowConfirmation(
+            "Allow 'All Files Access'?\n\nNeeded for installing mods and saving local game backups under /storage/emulated/0/StS2Launcher/.",
+            onConfirmed: AppPaths.RequestStoragePermission,
+            onCancelled: null
+        );
     }
 
     private void HandleFastPath(FastPathResult result)
@@ -322,22 +352,156 @@ public class LauncherController
 
     private async void OnDownloadPressed()
     {
-        _view.Download.ShowProgress("Connecting to Steam...");
-        await _model.StartDownloadAsync();
+        _view.Download.ShowProgress("Loading branches...");
+
+        System.Collections.Generic.List<SteamBranchInfo> branches;
+        try
+        {
+            branches = await _model.ListBranchesAsync();
+        }
+        catch (Exception ex)
+        {
+            _view.AppendLog($"Branch list failed: {ex.Message}");
+            _view.Download.Reset();
+            return;
+        }
+
+        var current = LauncherModel.LoadSelectedBranch();
+        string picked;
+        if (branches.Count <= 1)
+        {
+            picked = branches.Count == 1 ? branches[0].Name : "public";
+        }
+        else
+        {
+            picked = await ShowBranchPickerAsync(branches, current);
+            if (picked == null)
+            {
+                _view.Download.Reset();
+                return;
+            }
+        }
+
+        LauncherModel.SaveSelectedBranch(picked);
+        _view.Download.ShowProgress(
+            picked == "public" ? "Connecting to Steam..." : $"Connecting to Steam ({picked})..."
+        );
+        await _model.StartDownloadAsync(picked);
     }
 
     private async void OnCheckForUpdatesPressed()
     {
         _checkingForUpdates = true;
         _view.Actions.SetUpdateButtonDisabled(true);
-        _view.Actions.SetUpdateButtonText("Checking...");
+        _view.Actions.SetUpdateButtonText("Loading branches...");
+
+        System.Collections.Generic.List<SteamBranchInfo> branches;
+        try
+        {
+            branches = await _model.ListBranchesAsync();
+        }
+        catch (Exception ex)
+        {
+            _view.AppendLog($"Branch list failed: {ex.Message}");
+            ResetUpdateButton();
+            _checkingForUpdates = false;
+            return;
+        }
+
+        var current = LauncherModel.LoadSelectedBranch();
+        string picked;
+        if (branches.Count <= 1)
+        {
+            picked = branches.Count == 1 ? branches[0].Name : "public";
+        }
+        else
+        {
+            picked = await ShowBranchPickerAsync(branches, current);
+            if (picked == null)
+            {
+                ResetUpdateButton();
+                _checkingForUpdates = false;
+                return;
+            }
+        }
+
+        LauncherModel.SaveSelectedBranch(picked);
+
+        // Branch switch + existing files = force a fresh download. The delta path
+        // has produced broken installs (e.g. card art mismatches) when going from
+        // public ↔ public-beta even though every file passes its manifest SHA-1,
+        // so we sidestep it for branch transitions.
+        if (picked != current && LauncherModel.GameFilesReady())
+        {
+            var confirmed = await ConfirmAsync(
+                $"Switch to '{picked}'?\n\nGame files (~3GB) will be redownloaded. Login and saves are kept."
+            );
+            if (!confirmed)
+            {
+                ResetUpdateButton();
+                _checkingForUpdates = false;
+                return;
+            }
+            _model.WipeGameFiles();
+            _runOnMainThread(() =>
+            {
+                _view.Actions.HideAll();
+                _view.Download.Visible = true;
+                _view.Download.Reset("DOWNLOAD GAME FILES");
+                _view.SetStatus($"Switched to {picked}. Tap DOWNLOAD GAME FILES to redownload.");
+            });
+            _checkingForUpdates = false;
+            return;
+        }
+
+        _view.Actions.SetUpdateButtonText(
+            picked == "public" ? "Checking..." : $"Checking {picked}..."
+        );
 
         // Check for launcher (APK) updates from GitHub in parallel with game file updates.
         var appUpdateTask = CheckAppUpdateAsync();
-        await _model.CheckForUpdatesAsync();
+        await _model.CheckForUpdatesAsync(picked);
         await appUpdateTask;
 
         _checkingForUpdates = false;
+    }
+
+    private Task<bool> ConfirmAsync(string message)
+    {
+        var tcs = new TaskCompletionSource<bool>();
+        _runOnMainThread(() =>
+        {
+            _view.ShowConfirmation(
+                message,
+                onConfirmed: () => tcs.TrySetResult(true),
+                onCancelled: () => tcs.TrySetResult(false)
+            );
+        });
+        return tcs.Task;
+    }
+
+    private void ResetUpdateButton()
+    {
+        _view.Actions.SetUpdateButtonText("CHECK FOR UPDATES");
+        _view.Actions.SetUpdateButtonDisabled(false);
+    }
+
+    private Task<string> ShowBranchPickerAsync(
+        System.Collections.Generic.IReadOnlyList<SteamBranchInfo> branches,
+        string currentBranch
+    )
+    {
+        var tcs = new TaskCompletionSource<string>();
+        _runOnMainThread(() =>
+        {
+            _view.ShowBranchPicker(
+                branches,
+                currentBranch,
+                onConfirmed: name => tcs.TrySetResult(name),
+                onCancelled: () => tcs.TrySetResult(null)
+            );
+        });
+        return tcs.Task;
     }
 
     private static readonly Color YellowLog = new(1f, 0.85f, 0.2f);
