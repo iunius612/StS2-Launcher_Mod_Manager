@@ -1,10 +1,40 @@
-# StS2 Launcher (Mod Manager Fork)
+# StS2 Launcher Mod (Mod Manager Fork)
 
 An Android launcher for Slay the Spire 2, built on a custom Godot 4.5.1 engine with .NET/Mono and Harmony runtime patching.
 
-> **Fork notice**: This is a community fork of [Ekyso/StS2-Launcher](https://github.com/Ekyso/StS2-Launcher). The upstream launcher's mod loader stopped working with recent game builds; this fork fixes that and adds a few mobile-UX tweaks. See **[Fork changes](#fork-changes-v022)** below.
+> **Fork notice**: This is a community fork of [Ekyso/StS2-Launcher](https://github.com/Ekyso/StS2-Launcher). The upstream launcher's mod loader stopped working with recent game builds; this fork fixes that, adds a Save Manager + cloud-conflict resolution, and adds a few mobile-UX tweaks. See the **Fork changes** sections below (latest first).
 
 > **Disclaimer**: This is an unofficial community project. Slay the Spire 2 is developed and published by Mega Crit Games. A valid Steam account that owns Slay the Spire 2 is required. Game files are downloaded directly from Steam after authentication. No game assets are included in this repository.
+
+## Fork changes (v0.3.0)
+
+Versioned as **0.3.0 (versionCode 227)**. **This is a breaking release** — the Android package id changes from `com.game.sts2launcher` to `com.game.sts2launcher.modmanager`, and the external storage root moves from `/storage/emulated/0/StS2Launcher/` to `/storage/emulated/0/StS2LauncherMM/`. Existing 0.2.x users have to:
+
+- Reinstall (the new package is a separate app — old data is not migrated automatically).
+- Move mods from the old path: file manager → `StS2Launcher/Mods/<ModId>/` → copy contents to `StS2LauncherMM/Mods/<ModId>/`.
+- Re-login to Steam and redownload the ~3 GB game payload (the old package's private data is sandboxed).
+
+The old package can stay installed alongside or be uninstalled at the user's discretion.
+
+### What's fixed / added
+
+1. **Cloud-save destruction fix (issue #4).** The launcher used to silently overwrite real Steam Cloud progress with fresh-default save files when the EnumerateUserFiles cache failed to load before `SaveManager.InitSettingsData()` ran. Symptoms: open the launcher, press PLAY, see "no save" main menu, and your PC progress is gone too once Steam syncs the destruction back. The fix:
+   - `CloudFileCache.WaitForLoadAsync()` — synchronous-blocking cache preload before any sync decision is made.
+   - `LauncherPatches.ConstructDefaultPrefix()` — first `SaveManager.Instance` access (during `NGame._Ready`) now blocks up to 15s on the cache load and falls back to a local-only `SaveManager` if it can't be obtained, so writes never reach the cloud-wrapped store with the cache in an unknown state.
+   - `CloudWriteQueue.Flush()` — now waits for the in-flight upload action, not just the queue depth (the original implementation returned the moment the queue dequeued, before the actual cloud RPC finished).
+   - `CCloud_ClientBeginFileUpload_Request.platforms_to_sync = uint.MaxValue` — was being left at 0, which made Steam Cloud treat mobile uploads as "no-platform" and surface a sync conflict on PC even between matching beta-branch installs.
+2. **Save Manager dialog.** A new explicit conflict-resolution UI replaces the silent timestamp-based resolver. On every PLAY, if local and cloud differ, a modal shows two side-by-side summary cards (W/L per character, max ascension, file size, file timestamp) and the user explicitly picks "Keep Local" / "Keep Cloud" / "Cancel". The same dialog is reachable from the **SAVE MANAGER** button on the launcher home — pressing it any time shows current sync state and offers an explicit re-sync.
+3. **Repurposed MOD MANAGER button → SAVE MANAGER.** The mod manager UI is still WIP; the button now opens the save sync dialog. The mod manager screen code is preserved (commented out at the controller call site) for when the flow is finished.
+4. **Package id renamed (issue #3).** `com.game.sts2launcher` → `com.game.sts2launcher.modmanager`. Stops the fork from sharing app data, external storage, ownership marker, and SharedPreferences with Ekyso's upstream APK. Side effect: the namespace and external-storage path also change.
+5. **External storage root renamed.** `/storage/emulated/0/StS2Launcher/` → `/storage/emulated/0/StS2LauncherMM/`. Same rationale — no overlap with upstream. The `Mods` and `Saves` subfolders are auto-created at launcher start once "All Files Access" is granted.
+6. **App label.** Home-screen / app-drawer label is now **"StS2 Launcher Mod"** so users running both forks can tell them apart.
+7. **In-game Quit waits for cloud upload completion (was hard 5s timeout).** The flush now exits the moment `CloudWriteQueue` signals "no work in flight" rather than waiting a fixed window. Healthy uploads finish in 1-5 s, cellular ones in 10-15 s; the 5-minute ceiling only kicks in if Steam itself is unreachable, in which case waiting longer wouldn't help. Background-mode (swipe-to-recents) flush stays at 5 s — Android can force-kill us before a longer wait completes.
+   - **Note for users:** during this Quit flush window the launcher process and its network connection stay alive in the background to finish the upload. If you watch the in-app log or system network indicators you'll see Steam traffic for those few seconds — that's the cloud sync completing, not a leak.
+
+### Save sync — important caveats
+
+- **Keep PC and mobile on the same Steam branch.** Mobile beta uploads to cloud are not readable by a PC client running Public, and vice versa. Steam shows a generic "sync conflict" with no auto-recovery; the only fix is to bring the PC branch in line with mobile's, run the game once, and then sync.
+- **If a destructive sync did happen on a 0.2.x device**, the recovery path is documented at [shrederr/sts2-progress-rebuild](https://github.com/shrederr/sts2-progress-rebuild). Drop the tool's exe into `%AppData%\SlayTheSpire2\steam\` and run it with Steam closed; it rebuilds `progress.save` from the per-run `.run` history and pushes the rebuild into Steam's cloud cache + bumps `remotecache.vdf` so cloud sync picks it up on the next Steam launch.
 
 ## Fork changes (v0.2.2)
 
@@ -26,17 +56,17 @@ Versioned as **0.2.1 (versionCode 201)**.
 
 ## Installing mods
 
-> **Heads up**: the "MOD MANAGER" button beneath PLAY on the login screen is a **TBD / work-in-progress UI**. The in-launcher SAF import flow is not wired up yet, so use the manual file-manager method below until it is.
+> **Heads up**: the "MOD MANAGER" button on 0.2.x has been repurposed to **"SAVE MANAGER"** in 0.3.0 (it opens the cloud sync dialog). The in-launcher SAF mod-import flow is still WIP, so use the manual file-manager method below until it lands.
 
-1. Grant the launcher "All files access" on first run when it prompts. Once granted, the launcher creates `/storage/emulated/0/StS2Launcher/Mods/` on its own.
+1. Grant the launcher "All files access" on first run when it prompts. Once granted, the launcher creates `/storage/emulated/0/StS2LauncherMM/Mods/` on its own.
 2. Install any Android file manager that can browse internal storage — Material Files, Solid Explorer, FE File Explorer, Samsung's built-in **내 파일**, etc.
-3. Navigate to `/storage/emulated/0/StS2Launcher/Mods/` and drop each mod as its own subfolder. A valid mod folder contains the mod's `.dll`, optional `.pck`, and a `<ModId>.json` manifest at its root — the same layout PC users paste into `Steam\steamapps\common\Slay the Spire 2\mods\`.
+3. Navigate to `/storage/emulated/0/StS2LauncherMM/Mods/` and drop each mod as its own subfolder. A valid mod folder contains the mod's `.dll`, optional `.pck`, and a `<ModId>.json` manifest at its root — the same layout PC users paste into `Steam\steamapps\common\Slay the Spire 2\mods\`.
 
    ![Mods folder layout](docs/images/mods_folder.jpg)
 
 4. Launch the game and tap PLAY. When the game's built-in "Load mods?" dialog appears, tap **OK** — the game will save the choice, restart through the launcher once, and come back up with mods loaded.
 
-If no mods appear, check `adb logcat | grep "\[Mods\]"` — successful scans log `Redirected ModManager.Initialize to /storage/emulated/0/StS2Launcher/Mods`.
+If no mods appear, check `adb logcat | grep "\[Mods\]"` — successful scans log `Redirected ModManager.Initialize to /storage/emulated/0/StS2LauncherMM/Mods`.
 
 ## Features
 
@@ -121,7 +151,7 @@ Output: `android/build/outputs/apk/mono/release/StS2Launcher-v<version>.apk`
 adb install -r android/build/outputs/apk/mono/release/StS2Launcher-v*.apk
 
 # Fresh install (clear saved credentials + cached assemblies)
-adb shell pm clear com.game.sts2launcher
+adb shell pm clear com.game.sts2launcher.modmanager
 ```
 
 ### Other build tasks

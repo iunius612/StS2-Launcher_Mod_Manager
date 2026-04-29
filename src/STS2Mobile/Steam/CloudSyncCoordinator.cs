@@ -127,6 +127,7 @@ public static class CloudSyncCoordinator
             {
                 await PushFileAsync(local, cloud, path);
             }
+            // (neither exists — no-op)
         }
         catch (Exception ex)
         {

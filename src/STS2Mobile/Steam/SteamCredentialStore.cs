@@ -120,7 +120,7 @@ public class SteamCredentialStore
         try
         {
             var jcw = Engine.GetSingleton("JavaClassWrapper");
-            var wrapper = (GodotObject)jcw.Call("wrap", "com.game.sts2launcher.GodotApp");
+            var wrapper = (GodotObject)jcw.Call("wrap", "com.game.sts2launcher.modmanager.GodotApp");
             return (GodotObject)wrapper.Call("getInstance");
         }
         catch

@@ -92,7 +92,7 @@ android {
 
     assetPacks = [":assetPackInstallTime"]
 
-    namespace = 'com.game.sts2launcher'
+    namespace = 'com.game.sts2launcher.modmanager'
 
     defaultConfig {
         // The default ignore pattern for the 'assets' directory includes hidden files and directories which are used by Godot projects.

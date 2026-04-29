@@ -24,6 +24,10 @@ public class LauncherView
     private readonly StyledPanel _panel;
     private float _panelBaseY;
 
+    // Exposed so the controller can use this Control as a parent when adding
+    // overlays (e.g. CloudConflictDialog opened from the Save Manager button).
+    public Control RootControl => _parent;
+
     public LauncherView(Control parent, float scale)
     {
         _parent = parent;
@@ -84,7 +88,10 @@ public class LauncherView
             ShowConfirmation(message, onOk, onCancel);
         left.AddChild(ModManager);
 
-        ModManagerButton = new StyledButton("MOD MANAGER", scale, fontSize: 14, height: 40);
+        // Repurposed in 0.3.0: opens the Save Sync dialog instead of the WIP
+        // mod manager screen. The ModManagerSection above is still constructed
+        // for future use but no longer reachable from this button.
+        ModManagerButton = new StyledButton("SAVE MANAGER", scale, fontSize: 14, height: 40);
         ModManagerButton.Visible = false;
         left.AddChild(ModManagerButton);
 

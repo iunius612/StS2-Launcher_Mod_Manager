@@ -238,19 +238,25 @@ public static class AppLifecyclePatches
 
     // Replaces the default quit (force-kill) with a clean app restart via GodotApp.
     // Saves are already written by the original Quit() callers before this runs.
+    // The flush blocks until cloud uploads truly complete — CloudWriteQueue's
+    // _actionInProgress flag plus the queue depth signal that. The timeout is a
+    // catastrophic ceiling for unreachable-Steam scenarios, not the typical wait:
+    // healthy uploads finish in 1-5 s, cellular ones in 10-15 s, a per-file 3x
+    // retry budget caps at ~90 s, and 5 minutes covers multi-file queues. Going
+    // higher just means hanging on the user when Steam itself is dead.
     public static bool QuitPrefix(object __instance)
     {
         try
         {
             try
             {
-                SteamKit2CloudSaveStore.Instance?.Flush(5000);
+                SteamKit2CloudSaveStore.Instance?.Flush(300_000);
             }
             catch { }
 
             PatchHelper.Log("NGame.Quit intercepted, restarting app");
             var jcw = Engine.GetSingleton("JavaClassWrapper");
-            var wrapper = (GodotObject)jcw.Call("wrap", "com.game.sts2launcher.GodotApp");
+            var wrapper = (GodotObject)jcw.Call("wrap", "com.game.sts2launcher.modmanager.GodotApp");
             var godotApp = (GodotObject)wrapper.Call("getInstance");
             godotApp.Call("restartApp");
             return false;

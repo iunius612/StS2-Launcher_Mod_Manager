@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using SteamKit2.Internal;
 
 namespace STS2Mobile.Steam;
@@ -28,6 +29,12 @@ public class CloudFileCache
     {
         return path.Replace("user://", "").Replace("\\", "/");
     }
+
+    // True only after EnumerateUserFiles has completed at least once. Callers
+    // making sync decisions must check this — when false, FileExists/GetFileSize
+    // results are not authoritative and should not be used to choose between
+    // push, pull, or no-op (see issue #4).
+    public bool IsLoaded => _loaded;
 
     public bool FileExists(string path)
     {
@@ -128,6 +135,32 @@ public class CloudFileCache
         _retries = 0;
         _nextRetryTime = DateTimeOffset.MinValue;
         EnsureLoaded();
+    }
+
+    // Drives EnumerateUserFiles on a worker thread and waits for either success
+    // or MaxRetries exhaustion. The launcher gates SaveManager construction on
+    // this — when it returns false, the launcher falls back to a local-only
+    // SaveManager so the game's writes never reach the cloud (issue #4).
+    public async Task<bool> WaitForLoadAsync(int timeoutMs = 15_000)
+    {
+        if (_loaded)
+            return true;
+
+        var deadline = DateTimeOffset.UtcNow.AddMilliseconds(timeoutMs);
+        await Task.Run(EnsureLoaded).ConfigureAwait(false);
+
+        while (!_loaded && _retries < MaxRetries && DateTimeOffset.UtcNow < deadline)
+        {
+            var sleepMs = (int)
+                Math.Min(
+                    1_000,
+                    Math.Max(50, (_nextRetryTime - DateTimeOffset.UtcNow).TotalMilliseconds)
+                );
+            await Task.Delay(sleepMs).ConfigureAwait(false);
+            await Task.Run(EnsureLoaded).ConfigureAwait(false);
+        }
+
+        return _loaded;
     }
 
     private void EnsureLoaded()

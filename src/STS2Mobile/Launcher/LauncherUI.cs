@@ -54,6 +54,21 @@ public class LauncherUI : Control
 
     public Task WaitForLaunch() => _model.WaitForLaunch();
 
+    // Mirrors the scale formula used in Initialize so other launcher-spawned
+    // overlays (e.g. cloud conflict dialog) match the rest of the UI sizing.
+    public static float ResolveScale(Node sceneRef)
+    {
+        try
+        {
+            var vpSize = sceneRef?.GetViewport()?.GetVisibleRect().Size ?? new Vector2(1920, 1080);
+            return Math.Max(vpSize.X, vpSize.Y) / 960f;
+        }
+        catch
+        {
+            return 2.0f;
+        }
+    }
+
     private void OnProcessFrame()
     {
         while (_mainThreadQueue.TryDequeue(out var action))

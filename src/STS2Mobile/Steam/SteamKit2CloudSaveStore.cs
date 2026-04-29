@@ -119,6 +119,7 @@ public class SteamKit2CloudSaveStore : ICloudSaveStore, ISaveStore, IDisposable
     public void WriteFile(string path, byte[] bytes)
     {
         var canonPath = CloudFileCache.CanonicalizePath(path);
+
         var truncatedNow = DateTimeOffset.FromUnixTimeSeconds(
             DateTimeOffset.UtcNow.ToUnixTimeSeconds()
         );
@@ -234,6 +235,14 @@ public class SteamKit2CloudSaveStore : ICloudSaveStore, ISaveStore, IDisposable
     public string GetFullPath(string filename) => throw new NotImplementedException();
 
     public bool HasCloudFiles() => _cache.HasCloudFiles();
+
+    // The launcher inspects this before deciding whether the cloud-wrapped
+    // SaveManager is safe to construct. False means FileExists results are
+    // not authoritative and any push decision based on them is unsound.
+    public bool IsCacheLoaded => _cache.IsLoaded;
+
+    public Task<bool> WaitForCacheReadyAsync(int timeoutMs = 15_000) =>
+        _cache.WaitForLoadAsync(timeoutMs);
 
     public void ForgetFile(string path) => _cache.ForgetFile(path);
 
@@ -385,6 +394,12 @@ public class SteamKit2CloudSaveStore : ICloudSaveStore, ISaveStore, IDisposable
             time_stamp = uploadTimestamp,
             can_encrypt = false,
             is_shared_file = false,
+            // Bitfield telling Steam Cloud which platforms should sync this
+            // file. Leaving it 0 (the default) makes Steam treat the upload
+            // as belonging to no platform — PC clients then refuse to pull it
+            // and surface a sync conflict instead. 0xFFFFFFFF marks the file
+            // for every platform, matching cross-platform save behavior.
+            platforms_to_sync = uint.MaxValue,
         };
 
         if (batchId != 0)

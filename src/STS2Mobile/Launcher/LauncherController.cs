@@ -124,8 +124,12 @@ public class LauncherController
         var localBackupPref = LauncherModel.LoadLocalBackupPref();
         _view.Actions.SetLocalBackupChecked(localBackupPref);
         CloudSyncCoordinator.LocalBackupEnabled = localBackupPref;
-        if (localBackupPref)
-            AppPaths.EnsureExternalDirectories();
+        // Always ensure the external StS2LauncherMM/{Mods,Saves} tree exists when
+        // the user has granted storage permission — the Mods directory in
+        // particular is needed for ModLoaderPatches to find user-installed mods,
+        // independently of the Local Backup toggle. Internally a no-op when
+        // permission isn't granted yet.
+        AppPaths.EnsureExternalDirectories();
         _view.Actions.SetCloudSyncChecked(LauncherModel.LoadCloudSyncPref());
 
         var result = _model.StartSession();
@@ -202,11 +206,28 @@ public class LauncherController
         _view.ModManagerButton.Visible = true;
     }
 
-    private void OnModManagerPressed()
+    // Repurposed in 0.3.0 to open the Save Sync dialog instead of the WIP mod
+    // manager screen. The original mod-manager navigation is preserved (commented
+    // below) for when that flow is finished.
+    private async void OnModManagerPressed()
     {
-        PatchHelper.Log("[Mods] Mod Manager button tapped");
-        _view.SetStatus("Mod Manager");
-        _view.ShowModManager();
+        PatchHelper.Log("[Mods] Save Manager button tapped");
+        _view.Actions.SetPushPullDisabled(true);
+        _view.SetStatus("Save Manager");
+        try
+        {
+            await LauncherPatches.OpenSaveSyncDialogAsync(_view.RootControl);
+        }
+        catch (Exception ex)
+        {
+            PatchHelper.Log($"[Cloud] Save Manager error: {ex.Message}");
+        }
+        finally
+        {
+            _view.Actions.SetPushPullDisabled(false);
+        }
+        // Original navigation:
+        // _view.ShowModManager();
     }
 
     public void OnModManagerBackPressed()

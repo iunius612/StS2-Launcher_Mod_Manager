@@ -1,4 +1,4 @@
-package com.game.sts2launcher;
+package com.game.sts2launcher.modmanager;
 
 import org.godotengine.godot.Godot;
 import org.godotengine.godot.GodotActivity;

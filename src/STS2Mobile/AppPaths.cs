@@ -7,7 +7,12 @@ namespace STS2Mobile;
 // Shared path constants for external storage directories and permission helpers.
 public static class AppPaths
 {
-    private const string ExternalRoot = "/storage/emulated/0/StS2Launcher";
+    // Renamed in 0.3.0 to avoid sharing external storage with Ekyso's upstream
+    // fork (issue #3). Users upgrading from the previous /StS2Launcher path
+    // are pointed to README/release notes for the manual move — auto-migration
+    // would only help upgrade-from-our-fork users while adding code complexity
+    // and surprising fresh installers, so it's intentionally not implemented.
+    public const string ExternalRoot = "/storage/emulated/0/StS2LauncherMM";
     public const string ExternalModsDir = ExternalRoot + "/Mods";
     public const string ExternalSaveBackupsDir = ExternalRoot + "/Saves";
     public const string ExternalModConfigFile = ExternalModsDir + "/mod_config.json";
@@ -66,7 +71,7 @@ public static class AppPaths
         try
         {
             var jcw = Engine.GetSingleton("JavaClassWrapper");
-            var wrapper = (GodotObject)jcw.Call("wrap", "com.game.sts2launcher.GodotApp");
+            var wrapper = (GodotObject)jcw.Call("wrap", "com.game.sts2launcher.modmanager.GodotApp");
             return (GodotObject)wrapper.Call("getInstance");
         }
         catch
