@@ -69,6 +69,22 @@ public class LauncherUI : Control
         }
     }
 
+    // Used by overlays that need to know the actual viewport height (not the
+    // scale) — e.g. CloudConflictDialog drops to compact font/padding when the
+    // viewport is short, so foldable cover-screen / folded landscape doesn't
+    // clip the buttons off the bottom.
+    public static float ResolveViewportHeight(Node sceneRef)
+    {
+        try
+        {
+            return sceneRef?.GetViewport()?.GetVisibleRect().Size.Y ?? 1080f;
+        }
+        catch
+        {
+            return 1080f;
+        }
+    }
+
     private void OnProcessFrame()
     {
         while (_mainThreadQueue.TryDequeue(out var action))

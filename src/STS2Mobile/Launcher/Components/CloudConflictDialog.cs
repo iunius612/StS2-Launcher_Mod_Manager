@@ -25,16 +25,80 @@ public class CloudConflictDialog : ColorRect
 
     public Task<CloudConflictChoice> Result => _result.Task;
 
+    // Single source of logical sizing values, scaled by a continuous viewport-Y
+    // density factor. Base values (the constants in ResolveSizing below) are
+    // designed for a 1700px-tall viewport (Fold unfolded landscape) — the
+    // density factor shrinks them down on shorter viewports (Fold folded
+    // ~900px → ~0.55) so the dialog always fits with its buttons visible.
+    // Font sizes have a hard readable floor so they never collapse to unreadable.
+    // The `scale` parameter is still the DPI multiplier from LauncherUI; this
+    // density layer is orthogonal — it only adjusts logical pixel proportions
+    // for short viewports without affecting DPI scaling.
+    private struct DialogSizing
+    {
+        public int OuterPadding;
+        public int VboxSeparation;
+        public int TitleFs;
+        public int SubtitleFs;
+        public int CardMargin;
+        public int CardSeparation;
+        public int CardTitleFs;
+        public int CardRowFs;
+        public int CardRowSeparation;
+        public int CardWidth;
+        public int EmptyCardHeight;
+        public int CardsRowSeparation;
+        public int ButtonRowSeparation;
+        public int ButtonHeight;
+        public int ButtonFs;
+        public int CancelWidth;
+        public int ChoiceWidth;
+        public int BadgeFs;
+    }
+
+    private static DialogSizing ResolveSizing(float viewportHeight)
+    {
+        float d = Mathf.Clamp(viewportHeight / 1700f, 0.55f, 1.0f);
+        int Px(int v) => Math.Max(1, (int)Math.Round(v * d));
+        int Fs(int v, int floor) => Math.Max(floor, (int)Math.Round(v * d));
+        return new DialogSizing
+        {
+            // Layout pixels — proportional, no readability floor needed
+            OuterPadding = Px(28),
+            VboxSeparation = Px(18),
+            CardMargin = Px(16),
+            CardSeparation = Px(8),
+            CardRowSeparation = Px(12),
+            CardWidth = Px(300),
+            EmptyCardHeight = Px(80),
+            CardsRowSeparation = Px(16),
+            ButtonRowSeparation = Px(12),
+            ButtonHeight = Px(48),
+            CancelWidth = Px(140),
+            ChoiceWidth = Px(160),
+            // Font sizes — floor at readable sizes
+            TitleFs = Fs(22, 14),
+            SubtitleFs = Fs(13, 10),
+            CardTitleFs = Fs(16, 11),
+            CardRowFs = Fs(12, 9),
+            BadgeFs = Fs(11, 8),
+            ButtonFs = Fs(14, 11),
+        };
+    }
+
     public CloudConflictDialog(
         SaveProgressSummary local,
         SaveProgressSummary cloud,
         bool localIsMoreRecent,
         float scale,
-        SyncDecision decision = SyncDecision.Conflict
+        SyncDecision decision = SyncDecision.Conflict,
+        float viewportHeight = 1080f
     )
     {
         local ??= new SaveProgressSummary();
         cloud ??= new SaveProgressSummary();
+
+        var sz = ResolveSizing(viewportHeight);
 
         SetAnchorsPreset(LayoutPreset.FullRect);
         Color = new Color(0, 0, 0, 0.7f);
@@ -51,11 +115,11 @@ public class CloudConflictDialog : ColorRect
         var boxStyle = new StyleBoxFlat();
         boxStyle.BgColor = new Color(0.13f, 0.13f, 0.16f);
         boxStyle.SetCornerRadiusAll((int)(10 * scale));
-        boxStyle.SetContentMarginAll((int)(28 * scale));
+        boxStyle.SetContentMarginAll((int)(sz.OuterPadding * scale));
         dialogBox.AddThemeStyleboxOverride("panel", boxStyle);
 
         var vbox = new VBoxContainer();
-        vbox.AddThemeConstantOverride("separation", (int)(18 * scale));
+        vbox.AddThemeConstantOverride("separation", (int)(sz.VboxSeparation * scale));
         dialogBox.AddChild(vbox);
 
         bool isInSync = decision == SyncDecision.Identical || decision == SyncDecision.NoData;
@@ -82,21 +146,21 @@ public class CloudConflictDialog : ColorRect
                 "이 디바이스와 Steam Cloud의 진행도가 다릅니다.\n어느 쪽을 유지할지 선택하세요."
             ),
         };
-        var title = new StyledLabel(titleText, scale, fontSize: 22);
+        var title = new StyledLabel(titleText, scale, fontSize: sz.TitleFs);
         vbox.AddChild(title);
 
-        var subtitle = new StyledLabel(subtitleText, scale, fontSize: 13);
+        var subtitle = new StyledLabel(subtitleText, scale, fontSize: sz.SubtitleFs);
         subtitle.AutowrapMode = TextServer.AutowrapMode.WordSmart;
         subtitle.CustomMinimumSize = new Vector2((int)(620 * scale), 0);
         vbox.AddChild(subtitle);
 
         var cardsRow = new HBoxContainer();
-        cardsRow.AddThemeConstantOverride("separation", (int)(16 * scale));
+        cardsRow.AddThemeConstantOverride("separation", (int)(sz.CardsRowSeparation * scale));
         cardsRow.Alignment = BoxContainer.AlignmentMode.Center;
         vbox.AddChild(cardsRow);
 
-        cardsRow.AddChild(BuildSummaryCard("📱  이 디바이스 (로컬)", local, localIsMoreRecent, scale));
-        cardsRow.AddChild(BuildSummaryCard("☁  Steam Cloud", cloud, !localIsMoreRecent, scale));
+        cardsRow.AddChild(BuildSummaryCard("📱  이 디바이스 (로컬)", local, localIsMoreRecent, scale, sz));
+        cardsRow.AddChild(BuildSummaryCard("☁  Steam Cloud", cloud, !localIsMoreRecent, scale, sz));
 
         // No "remember my choice" checkbox by design: which side is correct
         // depends on the situation (which device was last played, whether the
@@ -105,7 +169,7 @@ public class CloudConflictDialog : ColorRect
         // other way. Force a fresh decision every time.
 
         var buttonRow = new HBoxContainer();
-        buttonRow.AddThemeConstantOverride("separation", (int)(12 * scale));
+        buttonRow.AddThemeConstantOverride("separation", (int)(sz.ButtonRowSeparation * scale));
         buttonRow.Alignment = BoxContainer.AlignmentMode.Center;
         vbox.AddChild(buttonRow);
 
@@ -116,18 +180,26 @@ public class CloudConflictDialog : ColorRect
         var cancelBtn = new StyledButton(
             isInSync ? "닫기" : "취소",
             scale,
-            fontSize: 14,
-            height: 48
+            fontSize: sz.ButtonFs,
+            height: sz.ButtonHeight
         );
-        cancelBtn.CustomMinimumSize = new Vector2((int)(140 * scale), cancelBtn.CustomMinimumSize.Y);
+        cancelBtn.CustomMinimumSize = new Vector2(
+            (int)(sz.CancelWidth * scale),
+            cancelBtn.CustomMinimumSize.Y
+        );
         cancelBtn.Pressed += () => Resolve(CloudConflictChoice.Cancel);
         buttonRow.AddChild(cancelBtn);
 
         if (!isInSync)
         {
-            var localBtn = new StyledButton("로컬 유지", scale, fontSize: 15, height: 48);
+            var localBtn = new StyledButton(
+                "로컬 유지",
+                scale,
+                fontSize: sz.ButtonFs + 1,
+                height: sz.ButtonHeight
+            );
             localBtn.CustomMinimumSize = new Vector2(
-                (int)(160 * scale),
+                (int)(sz.ChoiceWidth * scale),
                 localBtn.CustomMinimumSize.Y
             );
             if (localIsMoreRecent)
@@ -135,9 +207,14 @@ public class CloudConflictDialog : ColorRect
             localBtn.Pressed += () => Resolve(CloudConflictChoice.KeepLocal);
             buttonRow.AddChild(localBtn);
 
-            var cloudBtn = new StyledButton("클라우드 유지", scale, fontSize: 15, height: 48);
+            var cloudBtn = new StyledButton(
+                "클라우드 유지",
+                scale,
+                fontSize: sz.ButtonFs + 1,
+                height: sz.ButtonHeight
+            );
             cloudBtn.CustomMinimumSize = new Vector2(
-                (int)(160 * scale),
+                (int)(sz.ChoiceWidth * scale),
                 cloudBtn.CustomMinimumSize.Y
             );
             if (!localIsMoreRecent)
@@ -176,31 +253,37 @@ public class CloudConflictDialog : ColorRect
         string title,
         SaveProgressSummary s,
         bool isRecent,
-        float scale
+        float scale,
+        DialogSizing sz
     )
     {
         var card = new PanelContainer();
         var style = new StyleBoxFlat();
         style.BgColor = new Color(0.18f, 0.18f, 0.22f);
         style.SetCornerRadiusAll((int)(6 * scale));
-        style.SetContentMarginAll((int)(16 * scale));
+        style.SetContentMarginAll((int)(sz.CardMargin * scale));
         if (isRecent)
         {
             style.BorderColor = new Color(0.3f, 0.75f, 0.5f);
             style.SetBorderWidthAll((int)(2 * scale));
         }
         card.AddThemeStyleboxOverride("panel", style);
-        card.CustomMinimumSize = new Vector2((int)(300 * scale), 0);
+        card.CustomMinimumSize = new Vector2((int)(sz.CardWidth * scale), 0);
 
         var col = new VBoxContainer();
-        col.AddThemeConstantOverride("separation", (int)(8 * scale));
+        col.AddThemeConstantOverride("separation", (int)(sz.CardSeparation * scale));
         card.AddChild(col);
 
         var headerRow = new HBoxContainer();
         headerRow.AddThemeConstantOverride("separation", (int)(8 * scale));
         col.AddChild(headerRow);
 
-        var titleLabel = new StyledLabel(title, scale, fontSize: 16, align: HorizontalAlignment.Left);
+        var titleLabel = new StyledLabel(
+            title,
+            scale,
+            fontSize: sz.CardTitleFs,
+            align: HorizontalAlignment.Left
+        );
         titleLabel.SizeFlagsHorizontal = SizeFlags.ExpandFill;
         headerRow.AddChild(titleLabel);
 
@@ -212,7 +295,7 @@ public class CloudConflictDialog : ColorRect
             badgeStyle.SetCornerRadiusAll((int)(4 * scale));
             badgeStyle.SetContentMarginAll((int)(6 * scale));
             badge.AddThemeStyleboxOverride("panel", badgeStyle);
-            var badgeLabel = new StyledLabel("최근", scale, fontSize: 11);
+            var badgeLabel = new StyledLabel("최근", scale, fontSize: sz.BadgeFs);
             badge.AddChild(badgeLabel);
             headerRow.AddChild(badge);
         }
@@ -228,30 +311,30 @@ public class CloudConflictDialog : ColorRect
             var emptyMsg = new StyledLabel(
                 "진행도 데이터 없음",
                 scale,
-                fontSize: 14,
+                fontSize: sz.CardRowFs + 2,
                 align: HorizontalAlignment.Center
             );
             emptyMsg.Modulate = new Color(1, 1, 1, 0.5f);
-            emptyMsg.CustomMinimumSize = new Vector2(0, (int)(80 * scale));
+            emptyMsg.CustomMinimumSize = new Vector2(0, (int)(sz.EmptyCardHeight * scale));
             emptyMsg.VerticalAlignment = VerticalAlignment.Center;
             col.AddChild(emptyMsg);
             return card;
         }
 
-        AddRow(col, "파일 생성 시간", s.FormatLastModified(), scale);
-        AddRow(col, "파일 크기", s.FormatSize(), scale);
+        AddRow(col, "파일 생성 시간", s.FormatLastModified(), scale, sz);
+        AddRow(col, "파일 크기", s.FormatSize(), scale, sz);
 
         if (s.ParseSucceeded)
         {
-            AddRow(col, "총 플레이타임", s.FormatPlaytime(), scale);
-            AddRow(col, "캐릭터", $"{s.CharactersTracked}명", scale);
-            AddRow(col, "전적", $"{s.TotalWins}승 / {s.TotalLosses}패", scale);
+            AddRow(col, "총 플레이타임", s.FormatPlaytime(), scale, sz);
+            AddRow(col, "캐릭터", $"{s.CharactersTracked}명", scale, sz);
+            AddRow(col, "전적", $"{s.TotalWins}승 / {s.TotalLosses}패", scale, sz);
             if (s.MaxAscension > 0)
-                AddRow(col, "최고 승천", $"{s.MaxAscension}", scale);
+                AddRow(col, "최고 승천", $"{s.MaxAscension}", scale, sz);
             if (s.FloorsClimbed > 0)
-                AddRow(col, "올라간 층", $"{s.FloorsClimbed:N0}", scale);
+                AddRow(col, "올라간 층", $"{s.FloorsClimbed:N0}", scale, sz);
             if (s.RelicsDiscovered > 0)
-                AddRow(col, "발견 유물", $"{s.RelicsDiscovered}", scale);
+                AddRow(col, "발견 유물", $"{s.RelicsDiscovered}", scale, sz);
         }
         else if (!s.IsEmpty)
         {
@@ -259,7 +342,7 @@ public class CloudConflictDialog : ColorRect
             var note = new StyledLabel(
                 "(상세 통계를 읽지 못함 — 파일은 존재함)",
                 scale,
-                fontSize: 11,
+                fontSize: sz.SubtitleFs,
                 align: HorizontalAlignment.Left
             );
             note.Modulate = new Color(1, 1, 1, 0.6f);
@@ -269,17 +352,33 @@ public class CloudConflictDialog : ColorRect
         return card;
     }
 
-    private static void AddRow(VBoxContainer parent, string key, string value, float scale)
+    private static void AddRow(
+        VBoxContainer parent,
+        string key,
+        string value,
+        float scale,
+        DialogSizing sz
+    )
     {
         var row = new HBoxContainer();
-        row.AddThemeConstantOverride("separation", (int)(12 * scale));
+        row.AddThemeConstantOverride("separation", (int)(sz.CardRowSeparation * scale));
 
-        var k = new StyledLabel(key, scale, fontSize: 12, align: HorizontalAlignment.Left);
+        var k = new StyledLabel(
+            key,
+            scale,
+            fontSize: sz.CardRowFs,
+            align: HorizontalAlignment.Left
+        );
         k.Modulate = new Color(1, 1, 1, 0.6f);
         k.SizeFlagsHorizontal = SizeFlags.ExpandFill;
         row.AddChild(k);
 
-        var v = new StyledLabel(value, scale, fontSize: 12, align: HorizontalAlignment.Right);
+        var v = new StyledLabel(
+            value,
+            scale,
+            fontSize: sz.CardRowFs,
+            align: HorizontalAlignment.Right
+        );
         row.AddChild(v);
 
         parent.AddChild(row);

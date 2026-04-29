@@ -349,7 +349,8 @@ public static class LauncherPatches
             decision.CloudSummary,
             decision.LocalIsMoreRecent,
             LauncherUI.ResolveScale(gameNode),
-            decision.Decision
+            decision.Decision,
+            LauncherUI.ResolveViewportHeight(gameNode)
         );
         gameNode.AddChild(dialog);
         var choice = await dialog.Result;
