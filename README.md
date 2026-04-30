@@ -6,6 +6,8 @@ An Android launcher for Slay the Spire 2, built on a custom Godot 4.5.1 engine w
 
 > **Disclaimer**: This is an unofficial community project. Slay the Spire 2 is developed and published by Mega Crit Games. A valid Steam account that owns Slay the Spire 2 is required. Game files are downloaded directly from Steam after authentication. No game assets are included in this repository.
 
+> **사용설명서 (한국어)**: 처음 설치하는 사용자를 위한 단계별 가이드는 [docs/USER_GUIDE.md](docs/USER_GUIDE.md) 참조.
+
 ## Fork changes (v0.3.2)
 
 Versioned as **0.3.2 (versionCode 233)**. Drop-in upgrade from 0.3.x — saves and credentials carry over. Targets issue #7 (Save Manager dialog blind to in-progress runs) which combined with several smaller defects produced a destructive cross-device loop where a quick swipe-to-quit could lose the most recently entered floor.
