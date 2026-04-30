@@ -145,10 +145,17 @@ public class ActionSection : VBoxContainer
         _updateButton.Visible = false;
     }
 
-    public void SetPushPullDisabled(bool disabled)
+    // Locks every sync-affecting button while a cloud operation is in flight.
+    // Issue #7: previously only push/pull were disabled — PLAY was still
+    // pressable, so a user who tapped Save Manager and then quickly hit PLAY
+    // could enter the game's GameStartupWrapper concurrently with the cloud
+    // handshake (race against ConstructDefaultPrefix's cache preload). PLAY
+    // now stays disabled until the in-flight sync resolves.
+    public void SetSyncBusy(bool busy)
     {
-        _pushButton.Disabled = disabled;
-        _pullButton.Disabled = disabled;
+        _pushButton.Disabled = busy;
+        _pullButton.Disabled = busy;
+        _launchButton.Disabled = busy;
     }
 
     public void SetUpdateButtonText(string text) => _updateButton.Text = text;

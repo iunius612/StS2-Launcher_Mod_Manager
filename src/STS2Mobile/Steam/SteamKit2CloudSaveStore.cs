@@ -130,12 +130,14 @@ public class SteamKit2CloudSaveStore : ICloudSaveStore, ISaveStore, IDisposable
             if (_collectingBatch)
             {
                 _batchPendingFiles.Add((path, bytes));
+                Issue7Diagnostics.LogWriteEnqueue(path, bytes.Length, _batchPendingFiles.Count);
                 return;
             }
         }
 
         var ts = truncatedNow;
         _writeQueue.Enqueue(() => UploadWithRetry(path, bytes, timestamp: ts));
+        Issue7Diagnostics.LogWriteEnqueue(path, bytes.Length, _writeQueue.Count);
     }
 
     public Task WriteFileAsync(string path, string content)

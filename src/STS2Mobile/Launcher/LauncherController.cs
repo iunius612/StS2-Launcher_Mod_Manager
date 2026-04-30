@@ -212,7 +212,7 @@ public class LauncherController
     private async void OnModManagerPressed()
     {
         PatchHelper.Log("[Mods] Save Manager button tapped");
-        _view.Actions.SetPushPullDisabled(true);
+        _view.Actions.SetSyncBusy(true);
         _view.SetStatus("Save Manager");
         try
         {
@@ -224,7 +224,7 @@ public class LauncherController
         }
         finally
         {
-            _view.Actions.SetPushPullDisabled(false);
+            _view.Actions.SetSyncBusy(false);
         }
         // Original navigation:
         // _view.ShowModManager();
@@ -581,7 +581,7 @@ public class LauncherController
             "Push local saves to cloud?\nThis will overwrite your cloud saves.",
             () =>
             {
-                _view.Actions.SetPushPullDisabled(true);
+                _view.Actions.SetSyncBusy(true);
                 _view.AppendLog("Pushing local saves to cloud...");
                 Task.Run(async () =>
                 {
@@ -592,7 +592,7 @@ public class LauncherController
                     _runOnMainThread(() =>
                     {
                         _view.AppendLog("Push complete.");
-                        _view.Actions.SetPushPullDisabled(false);
+                        _view.Actions.SetSyncBusy(false);
                     });
                 });
             }
@@ -605,7 +605,7 @@ public class LauncherController
             "Pull cloud saves to local?\nThis will overwrite your local saves.",
             () =>
             {
-                _view.Actions.SetPushPullDisabled(true);
+                _view.Actions.SetSyncBusy(true);
                 _view.AppendLog("Pulling cloud saves to local...");
                 Task.Run(async () =>
                 {
@@ -616,7 +616,7 @@ public class LauncherController
                     _runOnMainThread(() =>
                     {
                         _view.AppendLog("Pull complete.");
-                        _view.Actions.SetPushPullDisabled(false);
+                        _view.Actions.SetSyncBusy(false);
                     });
                 });
             }

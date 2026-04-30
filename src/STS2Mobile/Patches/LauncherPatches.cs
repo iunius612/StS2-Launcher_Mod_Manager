@@ -299,6 +299,12 @@ public static class LauncherPatches
         PatchHelper.Log(
             $"[Cloud] Save Manager: opening dialog (decision={rawDecision.Decision})"
         );
+        Issue7Diagnostics.LogDialogSummary(
+            "SaveManagerButton",
+            displayDecision.Decision,
+            displayDecision.LocalSummary,
+            displayDecision.CloudSummary
+        );
         await HandleConflictAsync(parent, localStore, cloudStore, displayDecision);
     }
 
@@ -310,6 +316,12 @@ public static class LauncherPatches
     {
         var result = await CloudSyncDecisions.DetermineAsync(localStore, cloudStore);
         PatchHelper.Log($"[Cloud] Sync decision: {result.Decision}");
+        Issue7Diagnostics.LogDialogSummary(
+            "FirstPlayAuto",
+            result.Decision,
+            result.LocalSummary,
+            result.CloudSummary
+        );
 
         switch (result.Decision)
         {
@@ -350,7 +362,8 @@ public static class LauncherPatches
             decision.LocalIsMoreRecent,
             LauncherUI.ResolveScale(gameNode),
             decision.Decision,
-            LauncherUI.ResolveViewportHeight(gameNode)
+            LauncherUI.ResolveViewportHeight(gameNode),
+            decision.DiffSlotCount
         );
         gameNode.AddChild(dialog);
         var choice = await dialog.Result;
@@ -481,6 +494,20 @@ public static class LauncherPatches
         bool keepLocal
     )
     {
+        // Issue #7 fix scope:
+        // 1. Also process current_run.save / current_run_mp.save — previously
+        //    only progress.save was synced here, leaving the in-progress run
+        //    one resolved-conflict away from being silently overwritten by
+        //    AutoSyncFileAsync's "cloud wins" fallback when floors match.
+        // 2. After local writes (KeepCloud branch), call SetLastModifiedTime
+        //    to align local mtime with cloud's, otherwise local mtime = NOW
+        //    (file write timestamp) and cloud mtime stays at original cloud
+        //    value, leaving the next launch with a permanent mtime asymmetry
+        //    that re-triggers conflict and points the "최근" badge at the
+        //    wrong side.
+        // 3. After cloud writes (KeepLocal branch), align local mtime to NOW
+        //    too — SteamKit2CloudSaveStore.WriteFile sets cloud mtime to NOW
+        //    automatically, so matching local to NOW keeps both sides equal.
         var wasModded = UserDataPathProvider.IsRunningModded;
         try
         {
@@ -489,32 +516,18 @@ public static class LauncherPatches
                 UserDataPathProvider.IsRunningModded = modded;
                 for (int profile = 1; profile <= 3; profile++)
                 {
-                    var path = ProgressSaveManager.GetProgressPathForProfile(profile);
-                    try
-                    {
-                        if (keepLocal)
-                        {
-                            if (local.FileExists(path))
-                            {
-                                var content = local.ReadFile(path);
-                                cloud.WriteFile(path, content);
-                                PatchHelper.Log($"[Cloud] Conflict apply: pushed {path}");
-                            }
-                        }
-                        else
-                        {
-                            if (cloud.FileExists(path))
-                            {
-                                var content = await cloud.ReadFileAsync(path);
-                                await local.WriteFileAsync(path, content);
-                                PatchHelper.Log($"[Cloud] Conflict apply: pulled {path}");
-                            }
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        PatchHelper.Log($"[Cloud] Conflict apply failed for {path}: {ex.Message}");
-                    }
+                    await ApplyOneAsync(
+                        local, cloud, keepLocal,
+                        ProgressSaveManager.GetProgressPathForProfile(profile)
+                    );
+                    await ApplyOneAsync(
+                        local, cloud, keepLocal,
+                        RunSaveManager.GetRunSavePath(profile, "current_run.save")
+                    );
+                    await ApplyOneAsync(
+                        local, cloud, keepLocal,
+                        RunSaveManager.GetRunSavePath(profile, "current_run_mp.save")
+                    );
                 }
             }
         }
@@ -524,4 +537,43 @@ public static class LauncherPatches
         }
     }
 
+    private static async Task ApplyOneAsync(
+        ISaveStore local,
+        SteamKit2CloudSaveStore cloud,
+        bool keepLocal,
+        string path
+    )
+    {
+        try
+        {
+            if (keepLocal)
+            {
+                if (local.FileExists(path))
+                {
+                    var content = local.ReadFile(path);
+                    cloud.WriteFile(path, content);
+                    // SteamKit2CloudSaveStore stamps cloud mtime to NOW on
+                    // write; sync local to NOW too so DetermineAsync sees
+                    // identical mtimes on the next pass.
+                    local.SetLastModifiedTime(path, DateTimeOffset.UtcNow);
+                    PatchHelper.Log($"[Cloud] Conflict apply: pushed {path}");
+                }
+            }
+            else
+            {
+                if (cloud.FileExists(path))
+                {
+                    var content = await cloud.ReadFileAsync(path);
+                    var cloudTime = cloud.GetLastModifiedTime(path);
+                    await local.WriteFileAsync(path, content);
+                    local.SetLastModifiedTime(path, cloudTime);
+                    PatchHelper.Log($"[Cloud] Conflict apply: pulled {path}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            PatchHelper.Log($"[Cloud] Conflict apply failed for {path}: {ex.Message}");
+        }
+    }
 }

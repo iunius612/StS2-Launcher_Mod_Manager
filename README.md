@@ -6,6 +6,30 @@ An Android launcher for Slay the Spire 2, built on a custom Godot 4.5.1 engine w
 
 > **Disclaimer**: This is an unofficial community project. Slay the Spire 2 is developed and published by Mega Crit Games. A valid Steam account that owns Slay the Spire 2 is required. Game files are downloaded directly from Steam after authentication. No game assets are included in this repository.
 
+## Fork changes (v0.3.2)
+
+Versioned as **0.3.2 (versionCode 233)**. Drop-in upgrade from 0.3.x — saves and credentials carry over. Targets issue #7 (Save Manager dialog blind to in-progress runs) which combined with several smaller defects produced a destructive cross-device loop where a quick swipe-to-quit could lose the most recently entered floor.
+
+### What's fixed
+
+1. **Save Manager dialog now surfaces the in-progress run.** The `현재 진행` row replaces the `캐릭터 N명` accumulator and reads as `1막 3층` (or `—` when no run is active). For users hopping between PC and mobile mid-run this is the only signal the dialog gives that one side has progress the other doesn't — pre-fix the dialog showed identical accumulator stats with only mtime/size differing, so users couldn't tell which `Keep` button was the safe choice.
+2. **Conflict detection looks at `current_run.save`, not just `progress.save`.** `CloudSyncDecisions.DetermineAsync` now flags a conflict when current-run files differ even if accumulator files match. Before this, the most common cross-device case (one device has an in-progress run, the other has none/older) silently classified as `Identical` and the user was never prompted to sync.
+3. **Card shows which profile it represents.** A small "프로필 N" subtitle under the card title — the picked summary may now be from profile2 or profile3 rather than always profile1, depending on which profile triggered the conflict. Also `(N개 프로필)` in the body when more than one profile differs.
+4. **`최근` badge uses both progress + current_run mtime.** Pre-fix the badge compared `progress.save` mtime alone, which mispointed at cloud whenever the in-progress run was the newer signal but progress.save hadn't been touched (verified: a strict swipe scenario where local current_run was newer than cloud, but cloud progress.save had a fresher mtime from a prior KeepLocal — old code said cloud, true newer = local).
+5. **Conflict resolution covers `current_run.save` too, and aligns mtimes.** `ApplyChosenSideAsync` previously processed only `progress.save` and skipped the `SetLastModifiedTime` step. After a `Keep*` press the in-progress run was left out of sync (next AutoSync's "cloud wins" fallback could then overwrite a local newer copy on identical floor counts) and mtimes drifted apart, re-triggering the same conflict on every relaunch. Now it pushes/pulls all of `progress.save / current_run.save / current_run_mp.save × profile 1/2/3 × {vanilla, modded}` and stamps local mtime to match cloud (KeepCloud) or NOW (KeepLocal) so the next decision sees consistent state.
+6. **`SaveProgressComparer.CompareCurrentRun` size tiebreaker.** Floor counts often match on both sides even when the run files differ by hundreds of bytes (post-floor-entry actions update `current_run.save` without touching `map_point_history` length). The old `Equal → cloud wins` fallback then silently destroyed local progress on the next sync. New tiebreaker: same floor → larger file wins. Combined with #5 this auto-recovers the "swipe before queue drained" case without user input.
+7. **PLAY locks while a cloud op is in flight.** `SetSyncBusy` now disables PLAY along with Push/Pull. Pre-fix you could tap Save Manager and then PLAY before the dialog resolved — the cloud handshake would then race the game's startup. (Android lifecycle still doesn't guarantee `Flush(5000)` finishes before swipe kills the process; the size-tiebreaker auto-recovery in #6 is the real safety net for that case.)
+
+### Diagnostics scaffolding (gated, opt-in)
+
+`Issue7Diagnostics` is included but a no-op unless the marker file `/storage/emulated/0/StS2LauncherMM/.diagnose_issue7` exists. When present it dumps per-profile audit state, AutoSync outcomes, IsCorrupt branch entries (with first-bytes hex), and CloudWriteQueue depth — useful if a future regression in this area needs to be reproduced and mailed in. Marker is created with `adb shell touch /storage/emulated/0/StS2LauncherMM/.diagnose_issue7`.
+
+## Fork changes (v0.3.1)
+
+Versioned as **0.3.1 (versionCode 228)**. Drop-in upgrade from 0.3.0.
+
+1. **Save Manager dialog fits short viewports.** On the Fold's folded (cover) screen the conflict dialog overflowed below the keyboard area, hiding the choice buttons. The dialog now scales every layout dimension by a continuous viewport-Y density factor (clamped to 0.55 at ≤900 px, 1.0 at ≥1700 px) with hard readability floors on font sizes — buttons stay reachable on all foldable display modes.
+
 ## Fork changes (v0.3.0)
 
 Versioned as **0.3.0 (versionCode 227)**. **This is a breaking release** — the Android package id changes from `com.game.sts2launcher` to `com.game.sts2launcher.modmanager`, and the external storage root moves from `/storage/emulated/0/StS2Launcher/` to `/storage/emulated/0/StS2LauncherMM/`. Existing 0.2.x users have to:

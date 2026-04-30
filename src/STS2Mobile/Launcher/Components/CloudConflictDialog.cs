@@ -92,7 +92,8 @@ public class CloudConflictDialog : ColorRect
         bool localIsMoreRecent,
         float scale,
         SyncDecision decision = SyncDecision.Conflict,
-        float viewportHeight = 1080f
+        float viewportHeight = 1080f,
+        int diffSlotCount = 0
     )
     {
         local ??= new SaveProgressSummary();
@@ -143,7 +144,9 @@ public class CloudConflictDialog : ColorRect
             ),
             _ => (
                 "세이브 데이터 충돌",
-                "이 디바이스와 Steam Cloud의 진행도가 다릅니다.\n어느 쪽을 유지할지 선택하세요."
+                diffSlotCount > 1
+                    ? $"이 디바이스와 Steam Cloud의 진행도가 다릅니다 ({diffSlotCount}개 프로필).\n어느 쪽을 유지할지 선택하세요."
+                    : "이 디바이스와 Steam Cloud의 진행도가 다릅니다.\n어느 쪽을 유지할지 선택하세요."
             ),
         };
         var title = new StyledLabel(titleText, scale, fontSize: sz.TitleFs);
@@ -278,14 +281,33 @@ public class CloudConflictDialog : ColorRect
         headerRow.AddThemeConstantOverride("separation", (int)(8 * scale));
         col.AddChild(headerRow);
 
+        var headerColumn = new VBoxContainer();
+        headerColumn.AddThemeConstantOverride("separation", (int)(2 * scale));
+        headerColumn.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        headerRow.AddChild(headerColumn);
+
         var titleLabel = new StyledLabel(
             title,
             scale,
             fontSize: sz.CardTitleFs,
             align: HorizontalAlignment.Left
         );
-        titleLabel.SizeFlagsHorizontal = SizeFlags.ExpandFill;
-        headerRow.AddChild(titleLabel);
+        headerColumn.AddChild(titleLabel);
+
+        // Issue #7: when summary comes from a profile other than profile1
+        // (e.g. the diff-trigger profile), tell the user *which* profile this
+        // card represents so empty-looking accumulator stats make sense.
+        if (!string.IsNullOrEmpty(s.ProfileLabel))
+        {
+            var profileLabel = new StyledLabel(
+                s.ProfileLabel,
+                scale,
+                fontSize: sz.CardRowFs,
+                align: HorizontalAlignment.Left
+            );
+            profileLabel.Modulate = new Color(1, 1, 1, 0.5f);
+            headerColumn.AddChild(profileLabel);
+        }
 
         if (isRecent)
         {
@@ -327,7 +349,12 @@ public class CloudConflictDialog : ColorRect
         if (s.ParseSucceeded)
         {
             AddRow(col, "총 플레이타임", s.FormatPlaytime(), scale, sz);
-            AddRow(col, "캐릭터", $"{s.CharactersTracked}명", scale, sz);
+            // Issue #7: replaced "캐릭터 N명" (progress.save accumulator with
+            // little signal during conflict resolution) with the in-progress
+            // run indicator so the user can see exactly which side has the
+            // active run before choosing KeepLocal/KeepCloud. "—" when no
+            // current_run exists keeps the row position stable across cards.
+            AddRow(col, "현재 진행", s.FormatCurrentRun(), scale, sz);
             AddRow(col, "전적", $"{s.TotalWins}승 / {s.TotalLosses}패", scale, sz);
             if (s.MaxAscension > 0)
                 AddRow(col, "최고 승천", $"{s.MaxAscension}", scale, sz);
@@ -335,6 +362,12 @@ public class CloudConflictDialog : ColorRect
                 AddRow(col, "올라간 층", $"{s.FloorsClimbed:N0}", scale, sz);
             if (s.RelicsDiscovered > 0)
                 AddRow(col, "발견 유물", $"{s.RelicsDiscovered}", scale, sz);
+        }
+        else if (s.HasCurrentRun)
+        {
+            // progress.save unparseable but a current run exists — still show
+            // the run indicator since that's the most important signal.
+            AddRow(col, "현재 진행", s.FormatCurrentRun(), scale, sz);
         }
         else if (!s.IsEmpty)
         {

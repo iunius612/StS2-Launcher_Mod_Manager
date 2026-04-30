@@ -80,6 +80,7 @@ public static class CloudSyncCoordinator
                 if (IsCorrupt(localContent))
                 {
                     PatchHelper.Log($"[Cloud] Sync: local {path} is corrupt, pulling from cloud");
+                    Issue7Diagnostics.LogIsCorruptDetected(path, localContent);
                     BackupProgressFile(local, path);
                     var cloudTime = cloud.GetLastModifiedTime(path);
                     await local.WriteFileAsync(path, cloudContent);
@@ -98,6 +99,7 @@ public static class CloudSyncCoordinator
                 if (result == CompareResult.CloudWins)
                 {
                     PatchHelper.Log($"[Cloud] Sync: cloud wins for {path}");
+                    Issue7Diagnostics.LogCurrentRunSyncDetail(path, localContent, cloudContent, "CloudWins");
                     BackupProgressFile(local, path);
                     var cloudTime = cloud.GetLastModifiedTime(path);
                     await local.WriteFileAsync(path, cloudContent);
@@ -106,6 +108,7 @@ public static class CloudSyncCoordinator
                 else if (result == CompareResult.LocalWins)
                 {
                     PatchHelper.Log($"[Cloud] Sync: local wins for {path}, uploading");
+                    Issue7Diagnostics.LogCurrentRunSyncDetail(path, localContent, cloudContent, "LocalWins");
                     BackupProgressContent(path, cloudContent, "cloud");
                     cloud.WriteFile(path, localContent);
                 }
@@ -113,6 +116,7 @@ public static class CloudSyncCoordinator
                 {
                     // Cloud wins on equal progress or non-progress files to preserve PC as primary.
                     PatchHelper.Log($"[Cloud] Sync: contents differ for {path}, cloud wins");
+                    Issue7Diagnostics.LogCurrentRunSyncDetail(path, localContent, cloudContent, "EqualOrNonProgress→CloudWins");
                     BackupProgressFile(local, path);
                     var cloudTime = cloud.GetLastModifiedTime(path);
                     await local.WriteFileAsync(path, cloudContent);
@@ -121,10 +125,12 @@ public static class CloudSyncCoordinator
             }
             else if (cloudExists)
             {
+                Issue7Diagnostics.LogCurrentRunSyncDetail(path, null, null, "CloudOnly→Pull");
                 await PullFileAsync(local, cloud, path);
             }
             else if (localExists)
             {
+                Issue7Diagnostics.LogCurrentRunSyncDetail(path, null, null, "LocalOnly→Push");
                 await PushFileAsync(local, cloud, path);
             }
             // (neither exists — no-op)

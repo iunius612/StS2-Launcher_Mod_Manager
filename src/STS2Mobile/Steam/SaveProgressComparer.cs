@@ -82,6 +82,18 @@ public static class SaveProgressComparer
         if (localFloors != cloudFloors)
             return localFloors > cloudFloors ? CompareResult.LocalWins : CompareResult.CloudWins;
 
+        // Issue #7 fix: floor counts can match while the file differs by
+        // hundreds of bytes — every in-floor action (card play, gold gained,
+        // map_point_history serialization changes) updates current_run.save
+        // without changing map_point_history length. Without this tiebreaker
+        // the AutoSync fallback below classifies same-floor differences as
+        // Equal and lets the cloud-wins fallback overwrite a local newer copy.
+        // Verified destructive scenario: strict swipe leaves cloud at 38390 B
+        // / floor 2 and local at 39150 B / floor 2 — the 760 B gap is real
+        // post-floor-entry progress.
+        if (local.Length != cloud.Length)
+            return local.Length > cloud.Length ? CompareResult.LocalWins : CompareResult.CloudWins;
+
         return CompareResult.Equal;
     }
 

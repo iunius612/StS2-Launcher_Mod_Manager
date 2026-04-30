@@ -3,10 +3,17 @@ using System.Text.Json;
 
 namespace STS2Mobile.Steam;
 
-// UI-friendly summary of a progress.save snapshot. Fed into ConflictDialog so
-// the user can pick the "right" copy in a cloud-vs-local conflict. Defensive
-// against schema changes — every field that fails to parse falls back to a
-// stable raw value (file size + last-modified time) so the dialog still works.
+// UI-friendly summary of a progress.save snapshot, optionally augmented with
+// in-progress current_run.save state. Fed into ConflictDialog so the user can
+// pick the "right" copy in a cloud-vs-local conflict. Defensive against schema
+// changes — every field that fails to parse falls back to a stable raw value
+// (file size + last-modified time) so the dialog still works.
+//
+// Issue #7 verification (2026-04-30) showed that progress.save accumulators
+// alone are insufficient: a player who has just finished one floor of an
+// in-progress run can have identical progress.save on both sides while
+// current_run.save differs by hundreds of bytes. Without surfacing the
+// in-progress run state in the dialog, KeepCloud silently destroys progress.
 public class SaveProgressSummary
 {
     public bool ParseSucceeded { get; private set; }
@@ -22,8 +29,39 @@ public class SaveProgressSummary
     public int RawSize { get; private set; }
     public DateTimeOffset LastModified { get; private set; }
 
-    // Empty source: file does not exist or zero-length string.
-    public bool IsEmpty => RawSize == 0;
+    // Augmented from current_run.save when a run is in progress. CurrentRunAct
+    // and CurrentRunFloor follow the game's own UI convention — what the user
+    // sees as "1막 3층" maps to Act=1, Floor=3 (next-floor / floors-climbed-in-act
+    // + 1). When no current_run.save exists or it parses empty, HasCurrentRun
+    // stays false and the dialog renders "—".
+    public bool HasCurrentRun { get; private set; }
+    public int CurrentRunAct { get; private set; }
+    public int CurrentRunFloor { get; private set; }
+    public int CurrentRunRawSize { get; private set; }
+    public DateTimeOffset CurrentRunLastModified { get; private set; }
+
+    // Identifies which profile this summary represents — the dialog renders
+    // it as a small subtitle under the card title so the user understands why
+    // a profile with empty stats can show up (e.g. "(프로필 3)" when an
+    // in-progress run on a fresh slot is the conflict trigger, while the rich
+    // accumulator data lives on profile1). Set by CloudSyncDecisions.BuildSummary.
+    public int ProfileNumber { get; set; }
+    public bool IsModded { get; set; }
+    public string ProfileLabel
+    {
+        get
+        {
+            if (ProfileNumber <= 0)
+                return null;
+            var moddedTag = IsModded ? " · 모드" : "";
+            return $"프로필 {ProfileNumber}{moddedTag}";
+        }
+    }
+
+    // Empty source: NEITHER progress.save nor current_run.save has content.
+    // Pre-#7 this was just `RawSize == 0`, which incorrectly hid in-progress
+    // runs on brand-new profiles where progress.save is empty/default.
+    public bool IsEmpty => RawSize == 0 && !HasCurrentRun;
 
     public static SaveProgressSummary FromContent(
         string content,
@@ -93,6 +131,65 @@ public class SaveProgressSummary
         }
 
         return summary;
+    }
+
+    // Augments an existing summary with in-progress run state parsed from
+    // current_run.save. Safe to call with null/empty content — leaves
+    // HasCurrentRun=false in that case. Per game convention, Act/Floor mirror
+    // what the player sees on screen: map_point_history is an array of acts
+    // and each act is an array of cleared map points; the in-progress floor
+    // they're about to enter is `cleared count + 1` of the current act.
+    public void MergeCurrentRun(string content, int rawSize, DateTimeOffset lastModified)
+    {
+        CurrentRunRawSize = rawSize;
+        CurrentRunLastModified = lastModified;
+
+        if (rawSize == 0 || string.IsNullOrEmpty(content))
+            return;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(content);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                return;
+
+            int act = 0;
+            int floorInAct = 0;
+
+            if (
+                root.TryGetProperty("map_point_history", out var history)
+                && history.ValueKind == JsonValueKind.Array
+                && history.GetArrayLength() > 0
+            )
+            {
+                act = history.GetArrayLength();
+                var lastAct = history[history.GetArrayLength() - 1];
+                if (lastAct.ValueKind == JsonValueKind.Array)
+                    floorInAct = lastAct.GetArrayLength();
+            }
+
+            if (act == 0 && floorInAct == 0)
+                return; // No actual progression yet — treat as no current run.
+
+            CurrentRunAct = act;
+            // Show the floor the player is about to enter (or just entered) —
+            // matches the game's "1막 N층" indicator. Cleared 2 nodes ⇒ "3층".
+            CurrentRunFloor = floorInAct + 1;
+            HasCurrentRun = true;
+        }
+        catch (Exception ex)
+        {
+            PatchHelper.Log($"[Cloud] current_run.save parse failed: {ex.Message}");
+        }
+    }
+
+    // Convenience formatter for the dialog — "1막 3층" or "—".
+    public string FormatCurrentRun()
+    {
+        if (!HasCurrentRun)
+            return "—";
+        return $"{CurrentRunAct}막 {CurrentRunFloor}층";
     }
 
     // "Xh Ym" format. Handles 0 cleanly; no seconds shown to keep the dialog tidy.
