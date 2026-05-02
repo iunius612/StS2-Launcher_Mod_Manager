@@ -8,6 +8,44 @@ An Android launcher for Slay the Spire 2, built on a custom Godot 4.5.1 engine w
 
 > **사용설명서 (한국어)**: 처음 설치하는 사용자를 위한 단계별 가이드는 [docs/USER_GUIDE.md](docs/USER_GUIDE.md) 참조.
 
+## Fork changes (v0.3.3)
+
+Versioned as **0.3.3 (versionCode 241)**. Drop-in upgrade from 0.3.x — saves and credentials carry over. Targets issue #8 (BaseLib v3.x crashes the game on PatchAll) and issue #9 (Android `release_info` not loaded → main-menu `????` build label + LAN multiplayer version mismatch).
+
+### What's fixed
+
+1. **BaseLib v3.x mobile compat shim (issue #8).** BaseLib (Alchyr) v3.x and other mods that exercise its async hook system used to hang the game on a black screen during `PatchAll`. Symptom in logcat: a Godot native `BUG: Unreferenced static string to 0: _draw_rect` at `string_name.cpp:116`, followed by the renderer thread freezing while C# threads stay alive until the SteamKit2 connection idle-times out 30 s later.
+
+   Diagnosis (full notes in issue #8 comments):
+   - The crash fires immediately after BaseLib's `BaseLib.Utils.Patching.AsyncMethodCall.Create` injects new yield states into a compiler-emitted async state-machine `MoveNext` (e.g. `Hook+<AfterCardPlayed>d__15`).
+   - Initial hypothesis was the bundled `0Harmony.dll`'s `MonoILFixup` (an Ekyso-added IL post-pass) having inverted priority for raw-int local-index resolution. Ruled out by testing three override variants (LocalBuilder reuse / LocalVariableInfo reuse / leave raw operand untouched after `CecilILGenerator` local-count reflection check). All three produced the same crash at the same instruction.
+   - Real cause is downstream of `MonoILFixup`: BaseLib's emit sequence (`Box` / `BoxArg0` / generic `AwaitUnsafeOnCompleted` / hoisted-field `stfld`) triggers a memory corruption when committed via `MonoMod.Utils.Cil.CecilILGenerator` + runtime detour on Mono Android. The corruption happens to land on Godot's static `StringName` cache slot for `_draw_rect` (the `CanvasItem` virtual method name), driving its refcount below zero.
+
+   Workaround in this release:
+   - New `BaseLibCompatPatches` registers an `AppDomain.AssemblyLoad` listener at launcher init. When `BaseLib.dll` loads (post-PLAY, via the game's mod loader), the listener Harmony-prefixes `BaseLib.Utils.Patching.AsyncMethodCall.Create` to return the original IL unchanged and skip the original method. The state-machine surgery never runs; everything else BaseLib does runs normally.
+
+   **Trade-off (degraded mode — must be communicated to users):**
+
+   | Capability | Status with shim |
+   |------------|------------------|
+   | BaseLib DLL/PCK load + 153 Harmony patches install | ✅ |
+   | Node factories (`Control`, `NCreatureVisuals`, `NRestSiteCharacter`, etc.) | ✅ |
+   | Content / encounter / event patches (`DeprecatedAct`, `Glory`, `Hive`, `Overgrowth`, `Underdocks` ...) | ✅ |
+   | Config UI / `SimpleModConfig` | ✅ |
+   | `KeyGenerator` (enum extension, e.g. `CardKeyword`) | ✅ |
+   | `CustomPile` patch | ✅ |
+   | **Async hook system** (`AfterCardPlayed`, `BeforePlay`, etc.) | ❌ no-op (callbacks never fire) |
+   | Mods adding cards / characters / content via BaseLib's non-hook APIs | ✅ usually works |
+   | Mods that depend on BaseLib hooks for runtime triggers (e.g. "on card play do X") | partial — mod loads but trigger never fires |
+
+   This is an explicit workaround, not a real fix. Real fix paths require either (a) identifying the underlying MonoMod / Cecil / Mono Android emit bug and patching it upstream, (b) BaseLib shipping a mobile-aware variant that doesn't rely on the failing emit pattern, or (c) replacing the bundled Ekyso `0Harmony.dll` build.
+
+2. **`release_info.json` loaded on Android (issue #9).** The main-menu build label used to show `????` and the launcher reported `NON_RELEASE` to the LAN multiplayer handshake (causing version-mismatch errors against PC clients) because `ReleaseInfoManager.LoadConfig` looked at the executable directory which is empty on Android. New `ReleaseInfoPatches` postfix loads `release_info.json` from the game payload directory (`<files>/game/`) instead. Build label and LAN handshake now show the correct game version.
+
+### Known incompatibilities (cannot be fixed launcher-side)
+
+- **QuickReload (mmmmie), RitsuLib (OLC)**, and any other mod that imports `Steamworks.NET` directly — will crash on PLAY with a black screen on the mobile launcher. These mods call into `libsteam_api.so` (the Steamworks SDK native library) which Valve does not ship for Android. The launcher provides a no-op stub `libsteam_api.so` to satisfy the dynamic linker but actual API calls (`SteamUser.GetSteamID`, lobby APIs, Steam Cloud API, etc.) cannot work. The launcher's bundled SteamKit2 is a separate API surface (Steam network protocol for cloud / auth / depot manifests, not in-process Steam Client integration) and cannot substitute. Until each mod author ships a mobile-aware build that gates Steamworks calls, these mods are not usable on the launcher.
+
 ## Fork changes (v0.3.2)
 
 Versioned as **0.3.2 (versionCode 233)**. Drop-in upgrade from 0.3.x — saves and credentials carry over. Targets issue #7 (Save Manager dialog blind to in-progress runs) which combined with several smaller defects produced a destructive cross-device loop where a quick swipe-to-quit could lose the most recently entered floor.
