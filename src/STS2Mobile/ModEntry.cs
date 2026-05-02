@@ -61,6 +61,13 @@ public static class ModEntry
         // Game patches require sts2.dll; if missing, fall through to standalone launcher.
         try
         {
+            // Mobile-compat shim for BaseLib v3.x async state-machine patches.
+            // BaseLib's AsyncMethodCall.Create transpiler crashes the game on Mono Android
+            // (Godot StringName::unref BUG on _draw_rect). Until root cause in MonoMod/Cecil
+            // emit is fixed, prefix-disable BaseLib's state-machine surgery so the rest of
+            // BaseLib (node factories, content patches, etc.) can load.
+            // See .repro/issue8_root_cause.md.
+            BaseLibCompatPatches.Apply(_harmony);
             ModelDbInitPatch.Apply(_harmony);
             PlatformPatches.Apply(_harmony);
             ReleaseInfoPatches.Apply(_harmony);
