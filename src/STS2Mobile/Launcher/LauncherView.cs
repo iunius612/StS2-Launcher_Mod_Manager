@@ -269,13 +269,16 @@ public class LauncherView
         IReadOnlyList<SteamBranchInfo> branches,
         string currentBranch,
         Action<string> onConfirmed,
-        Action onCancelled = null
+        Action onCancelled = null,
+        Action onAtlasWipeRequested = null
     )
     {
         var dialog = new BranchPickerDialog(branches, currentBranch, _scale);
         dialog.BranchConfirmed += onConfirmed;
         if (onCancelled != null)
             dialog.Cancelled += onCancelled;
+        if (onAtlasWipeRequested != null)
+            dialog.AtlasWipeRequested += onAtlasWipeRequested;
         _parent.AddChild(dialog);
     }
 

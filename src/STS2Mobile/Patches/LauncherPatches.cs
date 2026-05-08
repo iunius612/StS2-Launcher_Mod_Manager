@@ -166,6 +166,9 @@ public static class LauncherPatches
         launcher.SetGameMode(true);
         launcher.Initialize();
         PatchHelper.Log("Launcher UI displayed");
+        // Issue #23 — dismiss the native ETC2-rebuild overlay if it was shown
+        // during this boot. No-op when overlay was never installed.
+        LauncherModel.GetGodotApp()?.Call("hideLoadingOverlay");
 
         await launcher.WaitForLaunch();
         PatchHelper.Log("User launched game, proceeding to startup...");

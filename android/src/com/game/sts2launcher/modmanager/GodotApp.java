@@ -10,7 +10,14 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.provider.Settings;
 import android.util.Log;
+import android.util.TypedValue;
+import android.view.Gravity;
 import android.view.KeyEvent;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.LinearLayout;
+import android.widget.ProgressBar;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.activity.EdgeToEdge;
@@ -106,7 +113,7 @@ public class GodotApp extends GodotActivity {
 				+ " android=" + Build.VERSION.RELEASE + " sdk=" + Build.VERSION.SDK_INT
 				+ " build=" + Build.DISPLAY);
 
-		SplashScreen.installSplashScreen(this);
+		SplashScreen splashScreen = SplashScreen.installSplashScreen(this);
 		EdgeToEdge.enable(this);
 
 		// Must be called before any native FMOD calls.
@@ -118,12 +125,33 @@ public class GodotApp extends GodotActivity {
 		// suffix so prod builds are completely inert.
 		if (BuildConfig.VERSION_NAME != null && BuildConfig.VERSION_NAME.contains("-debug")) {
 			handleDebugIntents();
+			processDebugWipeMarkers();
+		}
+
+		// Issue #23 — atlas cache invalidation. Two trigger paths:
+		//   1) Auto: PCK mtime changed since the last recorded stamp (game update).
+		//   2) Manual: .atlas_wipe_pending marker dropped by the [이미지 캐시 정리]
+		//      UI button or the debug_atlas_wipe intent.
+		// Either path wipes etc2_cache/.godot/imported/ (the mobile-specific
+		// compressed-texture cache). Without this, atlas frame indexes that
+		// changed in the new PCK keep resolving to the old cached layout, which
+		// surfaces as carded/relic/potion images appearing in the wrong slots.
+		boolean wipingAtlas = processAtlasWipeFlow();
+		if (wipingAtlas) {
+			// Hold the system splash up until our overlay is on screen — without
+			// this the user sees a long black gap during ETC2 re-import (~30s).
+			splashScreen.setKeepOnScreenCondition(() -> !overlayHandoffReady);
 		}
 
 		setupAssemblies();
 		extractAssetFile("FMOD_LOGOS/FMOD Logo White - Transparent Background.png", "fmod_logo.png");
 
 		super.onCreate(savedInstanceState);
+
+		if (wipingAtlas) {
+			showAtlasWipeOverlay();
+			overlayHandoffReady = true;
+		}
 
 		// Android WiFi power saving drops broadcast packets without a MulticastLock.
 		try {
@@ -141,6 +169,11 @@ public class GodotApp extends GodotActivity {
 	// drops marker files into getFilesDir(). The C# side polls these on its
 	// first-UI hook and routes them to the matching dialog handler. Used by
 	// developers to verify dialog UI without uploading a real GitHub release.
+	//
+	// Issue #23 (potion-index regression diagnostic) wipe markers also written
+	// here. Wipe execution itself happens in processDebugWipeMarkers() right
+	// after this — keeping intent parsing and wipe action separate so the
+	// wipe path stays callable from a future UI button without re-parsing.
 	private void handleDebugIntents() {
 		Intent intent = getIntent();
 		if (intent == null) {
@@ -160,8 +193,348 @@ public class GodotApp extends GodotActivity {
 				}
 				Log.i(TAG, "[Debug] Update-dialog marker written: version=" + version);
 			}
+			// Issue #23: diagnostic markers. The atlas_wipe intent reuses the
+			// production .atlas_wipe_pending marker so the same overlay/flow runs
+			// as the UI button — keeps debug and prod paths aligned.
+			if ("1".equals(intent.getStringExtra("debug_atlas_wipe"))) {
+				new File(getFilesDir(), ".atlas_wipe_pending").createNewFile();
+				Log.i(TAG, "[Diag] atlas_wipe marker written (uses prod flow)");
+			}
+			if ("1".equals(intent.getStringExtra("debug_dll_resync"))) {
+				new File(getFilesDir(), ".debug_dll_resync_pending").createNewFile();
+				Log.i(TAG, "[Diag/Phase1] dll_resync marker written");
+			}
+			if ("1".equals(intent.getStringExtra("debug_userdata_backup_wipe"))) {
+				new File(getFilesDir(), ".debug_userdata_wipe_pending").createNewFile();
+				Log.i(TAG, "[Diag/Phase1] userdata_wipe marker written");
+			}
+			if ("1".equals(intent.getStringExtra("debug_diagnostic_dump"))) {
+				runDiagnosticDump();
+			}
 		} catch (IOException ex) {
 			Log.w(TAG, "[Debug] handleDebugIntents IO failure", ex);
+		}
+	}
+
+	// Debug-only marker handler — production atlas wipe runs in
+	// processAtlasWipeFlow() instead. Kept narrow to dll_resync / userdata_wipe
+	// so debug builds can isolate-test those paths if a future regression points
+	// at them.
+	private void processDebugWipeMarkers() {
+		File dllMarker = new File(getFilesDir(), ".debug_dll_resync_pending");
+		if (dllMarker.exists()) {
+			wipeGameDlls();
+			dllMarker.delete();
+		}
+		File userdataMarker = new File(getFilesDir(), ".debug_userdata_wipe_pending");
+		if (userdataMarker.exists()) {
+			backupAndWipeUserData();
+			userdataMarker.delete();
+		}
+	}
+
+	// Production atlas-wipe flow (issue #23). Returns true if a wipe ran, so
+	// the caller can install the loading overlay. Two trigger paths share one
+	// implementation:
+	//   - manual: .atlas_wipe_pending marker (UI button or debug intent)
+	//   - automatic: PCK mtime differs from etc2_cache_pck_mtime stamp
+	// Both end up wiping etc2_cache/.godot/imported/ and refreshing the stamp.
+	private boolean processAtlasWipeFlow() {
+		File manualMarker = new File(getFilesDir(), ".atlas_wipe_pending");
+		boolean manualTriggered = manualMarker.exists();
+		boolean autoTriggered = !manualTriggered && shouldAutoWipeAtlasCache();
+		if (!manualTriggered && !autoTriggered) {
+			return false;
+		}
+		String reason = manualTriggered ? "manual" : "auto/PCK-changed";
+		Log.i(TAG, "[AtlasWipe] Triggered (" + reason + ")");
+		int total = wipeAtlasCacheDirs();
+		if (manualTriggered && !manualMarker.delete()) {
+			Log.w(TAG, "[AtlasWipe] failed to clear .atlas_wipe_pending — may re-fire");
+		}
+		recordPckMtime();
+		Log.i(TAG, "[AtlasWipe] Done — " + total + " entries removed (" + reason + ")");
+		return total > 0;
+	}
+
+	// Compares current PCK mtime to the last recorded stamp. First-run (no
+	// stamp) records the mtime without wiping — there's nothing stale yet.
+	private boolean shouldAutoWipeAtlasCache() {
+		File pck = new File(gameDir, PCK_FILE);
+		if (!pck.exists()) return false;
+		long pckMtime = pck.lastModified();
+		SharedPreferences prefs = getSharedPreferences("sts2mobile", MODE_PRIVATE);
+		long lastSeen = prefs.getLong("etc2_cache_pck_mtime", 0L);
+		if (lastSeen == 0L) {
+			prefs.edit().putLong("etc2_cache_pck_mtime", pckMtime).apply();
+			Log.i(TAG, "[AtlasWipe] First-run stamp recorded: " + pckMtime);
+			return false;
+		}
+		if (lastSeen == pckMtime) {
+			return false;
+		}
+		// Skip wipe when the cache dir has nothing to invalidate.
+		File etc2 = new File(getFilesDir(), "etc2_cache/.godot/imported");
+		if (!etc2.isDirectory()) {
+			prefs.edit().putLong("etc2_cache_pck_mtime", pckMtime).apply();
+			return false;
+		}
+		File[] children = etc2.listFiles();
+		if (children == null || children.length == 0) {
+			prefs.edit().putLong("etc2_cache_pck_mtime", pckMtime).apply();
+			return false;
+		}
+		Log.i(TAG, "[AtlasWipe] PCK mtime changed " + lastSeen + " -> " + pckMtime
+				+ " (" + children.length + " cached entries to invalidate)");
+		return true;
+	}
+
+	private void recordPckMtime() {
+		File pck = new File(gameDir, PCK_FILE);
+		if (!pck.exists()) return;
+		getSharedPreferences("sts2mobile", MODE_PRIVATE)
+				.edit()
+				.putLong("etc2_cache_pck_mtime", pck.lastModified())
+				.apply();
+	}
+
+	// On mobile the atlas cache lives at etc2_cache/.godot/imported/ (the
+	// mobile-specific ETC2/BPTC compressed texture cache), NOT the standard
+	// .godot/imported/ — the latter is empty on this build. Wipe both for safety.
+	private int wipeAtlasCacheDirs() {
+		int total = 0;
+		String[] candidates = {
+				".godot/imported",
+				"etc2_cache/.godot/imported",
+		};
+		for (String rel : candidates) {
+			File dir = new File(getFilesDir(), rel);
+			if (!dir.exists()) {
+				continue;
+			}
+			int[] counter = new int[]{0};
+			deleteRecursive(dir, counter);
+			total += counter[0];
+			Log.i(TAG, "[AtlasWipe] " + rel + " — " + counter[0] + " entries");
+		}
+		return total;
+	}
+
+	// Native loading overlay shown while ETC2 re-import runs (~30–60s on first
+	// boot after a wipe). The system SplashScreen is held in place via
+	// setKeepOnScreenCondition until this overlay is on screen, then
+	// overlayHandoffReady flips and the splash dismisses to reveal our overlay
+	// underneath. C# side calls hideLoadingOverlay() when LauncherUI is up.
+	private volatile boolean overlayHandoffReady = false;
+	private View loadingOverlayView;
+
+	private void showAtlasWipeOverlay() {
+		LinearLayout root = new LinearLayout(this);
+		root.setOrientation(LinearLayout.VERTICAL);
+		root.setGravity(Gravity.CENTER);
+		root.setBackgroundColor(0xFF1A1A1F);
+		root.setClickable(true); // swallow touches while overlay is up
+
+		ProgressBar spinner = new ProgressBar(this);
+		LinearLayout.LayoutParams spinnerLp = new LinearLayout.LayoutParams(
+				LinearLayout.LayoutParams.WRAP_CONTENT,
+				LinearLayout.LayoutParams.WRAP_CONTENT);
+		spinnerLp.setMargins(0, 0, 0, dpToPx(24));
+		root.addView(spinner, spinnerLp);
+
+		TextView title = new TextView(this);
+		title.setText("이미지 인덱스 캐시를 다시 만드는 중입니다");
+		title.setTextColor(0xFFFFFFFF);
+		title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
+		title.setGravity(Gravity.CENTER);
+		LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(
+				LinearLayout.LayoutParams.WRAP_CONTENT,
+				LinearLayout.LayoutParams.WRAP_CONTENT);
+		titleLp.setMargins(dpToPx(24), 0, dpToPx(24), dpToPx(8));
+		root.addView(title, titleLp);
+
+		TextView desc = new TextView(this);
+		desc.setText(
+				"게임 업데이트가 감지되어 모바일용 텍스처 캐시를\n"
+				+ "새 빌드 기준으로 재생성합니다.\n"
+				+ "첫 실행은 30~60초 소요되며 다음부터는 정상 속도입니다.\n\n"
+				+ "세이브 / 진행도 / 로그인 정보는 보존됩니다.");
+		desc.setTextColor(0xFFCCCCCC);
+		desc.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+		desc.setGravity(Gravity.CENTER);
+		LinearLayout.LayoutParams descLp = new LinearLayout.LayoutParams(
+				LinearLayout.LayoutParams.WRAP_CONTENT,
+				LinearLayout.LayoutParams.WRAP_CONTENT);
+		descLp.setMargins(dpToPx(24), 0, dpToPx(24), 0);
+		root.addView(desc, descLp);
+
+		addContentView(root, new ViewGroup.LayoutParams(
+				ViewGroup.LayoutParams.MATCH_PARENT,
+				ViewGroup.LayoutParams.MATCH_PARENT));
+		loadingOverlayView = root;
+		Log.i(TAG, "[AtlasWipe] Loading overlay shown");
+	}
+
+	// Called from C# (LauncherController) once the launcher UI is ready to take
+	// over. No-op when overlay was never shown.
+	public void hideLoadingOverlay() {
+		runOnUiThread(() -> {
+			if (loadingOverlayView == null) return;
+			ViewGroup parent = (ViewGroup) loadingOverlayView.getParent();
+			if (parent != null) parent.removeView(loadingOverlayView);
+			loadingOverlayView = null;
+			Log.i(TAG, "[AtlasWipe] Loading overlay hidden");
+		});
+	}
+
+	private int dpToPx(int dp) {
+		return Math.round(dp * getResources().getDisplayMetrics().density);
+	}
+
+	private void wipeGameDlls() {
+		File dllDir = new File(getFilesDir(), ".godot/mono/publish/arm64");
+		if (!dllDir.isDirectory()) {
+			Log.i(TAG, "[Diag/Phase1] No .godot/mono/publish/arm64/ to wipe");
+			return;
+		}
+		java.util.Set<String> bclNames = new java.util.HashSet<>();
+		try {
+			String[] bclFiles = getAssets().list("dotnet_bcl");
+			if (bclFiles != null) {
+				for (String name : bclFiles) bclNames.add(name);
+			}
+		} catch (IOException ex) {
+			Log.e(TAG, "[Diag/Phase1] failed to enumerate BCL — aborting dll wipe", ex);
+			return;
+		}
+		File[] files = dllDir.listFiles();
+		if (files == null) return;
+		int wiped = 0;
+		int preserved = 0;
+		for (File f : files) {
+			if (!f.isFile()) continue;
+			String name = f.getName();
+			if (name.endsWith(".so")) { preserved++; continue; }
+			if (bclNames.contains(name)) { preserved++; continue; }
+			if (f.delete()) wiped++;
+		}
+		Log.i(TAG, "[Diag/Phase1] Wiped " + wiped + " game dlls (preserved " + preserved
+				+ " BCL/so) — setupAssemblies will repopulate");
+	}
+
+	private void backupAndWipeUserData() {
+		File defaultDir = new File(getFilesDir(), "default");
+		if (!defaultDir.exists()) {
+			Log.i(TAG, "[Diag/Phase1] No default/ to wipe");
+			return;
+		}
+		try {
+			File savesDir = new File(Environment.getExternalStorageDirectory(),
+					"StS2LauncherMM/Saves");
+			savesDir.mkdirs();
+			String ts = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date());
+			File zipFile = new File(savesDir, "diag-userdata-backup-" + ts + ".zip");
+			zipDirectory(defaultDir, zipFile);
+			Log.i(TAG, "[Diag/Phase1] Backed up default/ to " + zipFile.getAbsolutePath()
+					+ " (" + zipFile.length() + " bytes)");
+			int[] counter = new int[]{0};
+			deleteRecursive(defaultDir, counter);
+			Log.i(TAG, "[Diag/Phase1] Wiped default/ — " + counter[0] + " entries removed");
+		} catch (Exception ex) {
+			Log.e(TAG, "[Diag/Phase1] backupAndWipeUserData failed — wipe aborted", ex);
+		}
+	}
+
+	private void runDiagnosticDump() {
+		try {
+			File dumpDir = new File(Environment.getExternalStorageDirectory(),
+					"StS2LauncherMM/Diagnostics");
+			dumpDir.mkdirs();
+			String ts = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date());
+			File dumpFile = new File(dumpDir, "diag-" + ts + ".txt");
+			StringBuilder sb = new StringBuilder();
+			sb.append("=== StS2 Phase 1 diagnostic dump (issue #23) ===\n");
+			sb.append("timestamp=").append(ts).append("\n");
+			sb.append("versionName=").append(BuildConfig.VERSION_NAME).append("\n");
+			sb.append("versionCode=").append(BuildConfig.VERSION_CODE).append("\n");
+			sb.append("device=").append(Build.MANUFACTURER).append("/").append(Build.MODEL).append("\n");
+			sb.append("android=").append(Build.VERSION.RELEASE)
+					.append(" sdk=").append(Build.VERSION.SDK_INT).append("\n\n");
+			File filesDir = getFilesDir();
+			sb.append("--- ").append(filesDir.getAbsolutePath()).append(" ---\n");
+			dumpDirRecursive(filesDir, sb, 0, 4);
+			try (FileWriter w = new FileWriter(dumpFile)) {
+				w.write(sb.toString());
+			}
+			Log.i(TAG, "[Diag/Phase1] Diagnostic dumped to " + dumpFile.getAbsolutePath()
+					+ " (" + dumpFile.length() + " bytes)");
+		} catch (Exception ex) {
+			Log.e(TAG, "[Diag/Phase1] diagnostic dump failed", ex);
+		}
+	}
+
+	private void dumpDirRecursive(File dir, StringBuilder sb, int depth, int maxDepth) {
+		if (depth > maxDepth) {
+			indent(sb, depth);
+			sb.append("(truncated)\n");
+			return;
+		}
+		File[] files = dir.listFiles();
+		if (files == null) return;
+		java.util.Arrays.sort(files, (a, b) -> a.getName().compareTo(b.getName()));
+		for (File f : files) {
+			indent(sb, depth);
+			sb.append(f.getName());
+			if (f.isDirectory()) {
+				File[] children = f.listFiles();
+				int n = children == null ? 0 : children.length;
+				sb.append("/ (").append(n).append(" entries)\n");
+				dumpDirRecursive(f, sb, depth + 1, maxDepth);
+			} else {
+				sb.append("  size=").append(f.length())
+						.append("  mtime=").append(f.lastModified()).append("\n");
+			}
+		}
+	}
+
+	private static void indent(StringBuilder sb, int depth) {
+		for (int i = 0; i < depth; i++) sb.append("  ");
+	}
+
+	private static void deleteRecursive(File f, int[] counter) {
+		if (f.isDirectory()) {
+			File[] children = f.listFiles();
+			if (children != null) {
+				for (File c : children) deleteRecursive(c, counter);
+			}
+		}
+		if (f.delete()) counter[0]++;
+	}
+
+	private static void zipDirectory(File srcDir, File zipFile) throws IOException {
+		try (java.util.zip.ZipOutputStream zos = new java.util.zip.ZipOutputStream(
+				new FileOutputStream(zipFile))) {
+			zipDirectoryRecursive(srcDir, srcDir.getAbsolutePath().length() + 1, zos);
+		}
+	}
+
+	private static void zipDirectoryRecursive(File dir, int relStart,
+			java.util.zip.ZipOutputStream zos) throws IOException {
+		File[] children = dir.listFiles();
+		if (children == null) return;
+		for (File f : children) {
+			if (f.isDirectory()) {
+				zipDirectoryRecursive(f, relStart, zos);
+			} else {
+				String entryName = f.getAbsolutePath().substring(relStart).replace('\\', '/');
+				zos.putNextEntry(new java.util.zip.ZipEntry(entryName));
+				try (InputStream in = new FileInputStream(f)) {
+					byte[] buf = new byte[8192];
+					int len;
+					while ((len = in.read(buf)) > 0) zos.write(buf, 0, len);
+				}
+				zos.closeEntry();
+			}
 		}
 	}
 

@@ -14,6 +14,11 @@ public class BranchPickerDialog : ColorRect
 {
     public event Action<string> BranchConfirmed;
     public event Action Cancelled;
+    // Issue #23 — secondary footer button. Surfaces the manual atlas-cache wipe
+    // path for users hitting carded/relic/potion image-index regression after a
+    // game update. The dialog closes itself before raising the event; the
+    // controller is responsible for the confirm flow.
+    public event Action AtlasWipeRequested;
 
     public BranchPickerDialog(
         IReadOnlyList<SteamBranchInfo> branches,
@@ -108,6 +113,23 @@ public class BranchPickerDialog : ColorRect
                 Cancelled?.Invoke();
         };
         buttonRow.AddChild(okButton);
+
+        // Issue #23 — secondary footer row, right-aligned. Small de-emphasized
+        // button so it doesn't compete with the primary OK / Cancel above.
+        var helperRow = new HBoxContainer();
+        helperRow.AddThemeConstantOverride("separation", (int)(8 * scale));
+        helperRow.Alignment = BoxContainer.AlignmentMode.End;
+        vbox.AddChild(helperRow);
+
+        var atlasButton = new StyledButton("이미지 캐시 정리", scale, fontSize: 11, height: 32);
+        atlasButton.Modulate = new Color(0.7f, 0.7f, 0.75f);
+        atlasButton.TooltipText = "포션 / 카드 / 유물 이미지가 잘못 표시될 때 사용";
+        atlasButton.Pressed += () =>
+        {
+            QueueFree();
+            AtlasWipeRequested?.Invoke();
+        };
+        helperRow.AddChild(atlasButton);
 
         center.AddChild(dialogBox);
         AddChild(center);

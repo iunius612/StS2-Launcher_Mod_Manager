@@ -721,10 +721,46 @@ public class LauncherController
                 branches,
                 currentBranch,
                 onConfirmed: name => tcs.TrySetResult(name),
-                onCancelled: () => tcs.TrySetResult(null)
+                onCancelled: () => tcs.TrySetResult(null),
+                // Issue #23 — manual atlas-cache wipe entrypoint. The branch
+                // picker closes itself before raising the event; here we
+                // resolve the picker's task as a cancel and chain the
+                // confirm-and-restart flow.
+                onAtlasWipeRequested: () =>
+                {
+                    tcs.TrySetResult(null);
+                    ShowAtlasWipeConfirm();
+                }
             );
         });
         return tcs.Task;
+    }
+
+    private void ShowAtlasWipeConfirm()
+    {
+        _view.ShowConfirmation(
+            "이미지 인덱스 캐시 정리\n\n"
+                + "포션 / 카드 / 유물 등 이미지가 잘못 표시될 때 사용하세요.\n"
+                + "게임 텍스처 캐시(약 660개) 를 삭제하고 앱을 재시작합니다.\n\n"
+                + "* 다음 실행이 30~60초 더 걸립니다 (재import)\n"
+                + "* 게임을 다시 다운로드하지 않습니다\n"
+                + "* 세이브 / 진행도 / 로그인 정보는 보존됩니다",
+            onConfirmed: () =>
+            {
+                try
+                {
+                    var marker = Path.Combine(OS.GetDataDir(), ".atlas_wipe_pending");
+                    File.Create(marker).Dispose();
+                    PatchHelper.Log("[AtlasWipe] manual marker written, restarting");
+                }
+                catch (Exception ex)
+                {
+                    PatchHelper.Log($"[AtlasWipe] failed to write marker: {ex.Message}");
+                }
+                LauncherModel.GetGodotApp()?.Call("restartApp");
+            },
+            onCancelled: null
+        );
     }
 
     private void OnDebugTogglePressed()
