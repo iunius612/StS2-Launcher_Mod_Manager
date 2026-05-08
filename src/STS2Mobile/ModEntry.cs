@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Runtime.InteropServices;
 using Godot;
 using Godot.Bridge;
@@ -54,6 +55,11 @@ public static class ModEntry
             return;
         _applied = true;
 
+        // Must run before any HarmonyLib touch — once HarmonySharedState's .cctor
+        // throws, every subsequent access re-throws the cached TypeInitializationException.
+        EnsureWritableTempPath();
+
+        PatchHelper.Log("[Build] Y700_issue19 test build (TMPDIR fix probe)");
         PatchHelper.Log("Initializing STS2Mobile...");
 
         _harmony = new Harmony("com.sts2mobile");
@@ -118,5 +124,86 @@ public static class ModEntry
         tree.Root.AddChild(launcher);
         launcher.Initialize();
         PatchHelper.Log("Standalone launcher displayed");
+    }
+
+    // MonoMod (used by HarmonyLib for runtime IL emit) writes dynamic assemblies
+    // to Path.GetTempPath(). On Unix that resolves via TMPDIR env var with "/tmp"
+    // as the fallback. Some Android ROMs (Lenovo ZUI 14 on Y700, issue #19) launch
+    // app processes without TMPDIR set, so MonoMod tries to write to "/tmp/MonoMod_DMD_*.dll"
+    // and HarmonySharedState's .cctor throws DirectoryNotFoundException — every patch
+    // then fails with a cached TypeInitializationException, the launcher falls into
+    // standalone mode, and "RESTART APP" loops forever.
+    //
+    // Strategy: probe Path.GetTempPath() writability. If it works (Samsung et al.),
+    // change nothing. Otherwise redirect TMPDIR to an app-private dir derived from
+    // the assembly's own location — Godot.OS APIs are unsafe to call this early
+    // (per the gd_mono.cpp init-context constraint), so we walk up from
+    // Assembly.Location instead.
+    private static void EnsureWritableTempPath()
+    {
+        try
+        {
+            var existing = Path.GetTempPath();
+            var probe = Path.Combine(existing, $"sts2_tmpdir_probe_{Guid.NewGuid():N}");
+            try
+            {
+                File.WriteAllBytes(probe, Array.Empty<byte>());
+                File.Delete(probe);
+                return;
+            }
+            catch
+            {
+                // existing temp path not writable — fall through to override
+            }
+
+            // Java's setupAssemblies() copies STS2Mobile.dll to
+            // <files>/.godot/mono/publish/arm64/. Walk up 4 levels to reach <files>.
+            var asmLoc = typeof(ModEntry).Assembly.Location;
+            if (string.IsNullOrEmpty(asmLoc))
+            {
+                PatchHelper.Log("[Diag] EnsureWritableTempPath: Assembly.Location empty");
+                return;
+            }
+            var dir = Path.GetDirectoryName(asmLoc);
+            for (int i = 0; i < 4 && !string.IsNullOrEmpty(dir); i++)
+                dir = Path.GetDirectoryName(dir);
+            if (string.IsNullOrEmpty(dir))
+            {
+                PatchHelper.Log($"[Diag] EnsureWritableTempPath: cannot derive files dir from {asmLoc}");
+                return;
+            }
+
+            var appPrivateTmp = Path.Combine(dir, ".tmp");
+            Directory.CreateDirectory(appPrivateTmp);
+            System.Environment.SetEnvironmentVariable("TMPDIR", appPrivateTmp);
+            System.Environment.SetEnvironmentVariable("TMP", appPrivateTmp);
+            System.Environment.SetEnvironmentVariable("TEMP", appPrivateTmp);
+            PatchHelper.Log(
+                $"[Diag] TMPDIR overridden -> {appPrivateTmp} (issue #19, was {existing})"
+            );
+
+            // App-private dir is persistent (unlike /tmp on stock devices), so stale
+            // MonoMod_DMD_*.dll would otherwise accumulate session over session.
+            try
+            {
+                int cleared = 0;
+                foreach (var f in Directory.GetFiles(appPrivateTmp, "MonoMod_DMD_*.dll"))
+                {
+                    try
+                    {
+                        File.Delete(f);
+                        cleared++;
+                    }
+                    catch { }
+                }
+                if (cleared > 0)
+                    PatchHelper.Log($"[Diag] Cleared {cleared} stale MonoMod_DMD files");
+            }
+            catch { }
+        }
+        catch (Exception ex)
+        {
+            PatchHelper.Log($"[Diag] EnsureWritableTempPath failed: {ex.Message}");
+        }
     }
 }
