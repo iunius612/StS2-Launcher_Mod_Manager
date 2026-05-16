@@ -418,9 +418,45 @@ public static class LanMultiplayerPatcher
 
     // ENet client connection initializer needs a unique application-level netId
     // per peer. The game uses SteamID over Steam transport, but on LAN the
-    // launcher chooses it. Hardcoding a single value (the historical 1000UL)
-    // collides when 2+ clients join the same host, so generate a random ID
-    // above the legacy 1000–1002 range.
+    // launcher chooses it. Hardcoding 1000UL collides when 2+ clients join the
+    // same host; a fresh random per-join broke save continuity (issue #26)
+    // because the game records netId as player_id and rejects mismatched
+    // re-joins. Persist a per-device id in user:// so the same device always
+    // presents the same id across sessions.
+    private const string ClientIdConfigPath = "user://lan_client_id.cfg";
+
+    private static ulong LoadOrCreateClientNetId()
+    {
+        try
+        {
+            var config = new ConfigFile();
+            if (config.Load(ClientIdConfigPath) == Error.Ok)
+            {
+                var stored = (string)config.GetValue("lan", "client_id", "");
+                if (!string.IsNullOrEmpty(stored) && ulong.TryParse(stored, out var parsed) && parsed >= 1003UL)
+                    return parsed;
+            }
+        }
+        catch (Exception ex)
+        {
+            PatchHelper.Log($"LoadClientNetId error: {ex.Message}");
+        }
+
+        var fresh = GenerateClientNetId();
+        try
+        {
+            var config = new ConfigFile();
+            config.SetValue("lan", "client_id", fresh.ToString());
+            config.Save(ClientIdConfigPath);
+            PatchHelper.Log($"Generated persistent LAN client id: {fresh}");
+        }
+        catch (Exception ex)
+        {
+            PatchHelper.Log($"SaveClientNetId error: {ex.Message}");
+        }
+        return fresh;
+    }
+
     private static ulong GenerateClientNetId()
     {
         var bytes = Guid.NewGuid().ToByteArray();
@@ -465,8 +501,7 @@ public static class LanMultiplayerPatcher
         _joinInProgress = true;
         try
         {
-            ResetSlotMap();
-            var netId = GenerateClientNetId();
+            var netId = LoadOrCreateClientNetId();
             var connInit = _eNetClientConnInitCtor.Invoke(
                 new object[] { netId, ip, (ushort)port }
             );
