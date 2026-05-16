@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Runtime.InteropServices;
 using Godot;
 using Godot.Bridge;
@@ -54,6 +55,32 @@ public static class ModEntry
             return;
         _applied = true;
 
+        // issue #19/#27: .NET Path.GetTempPath() falls back to "/tmp" on Unix
+        // when TMPDIR is unset; some Android ROMs (Lenovo ZUI 14, certain OneUI
+        // builds) don't set TMPDIR for app processes and /tmp/ doesn't exist on
+        // Android. MonoMod (Harmony's IL emitter) writes temp DLLs there, so
+        // HarmonySharedState.cctor throws, every Harmony patch fails, and the
+        // launcher is stuck in "RESTART APP" forever. Redirect TMPDIR to the
+        // app's private cache dir before any Harmony work. Hardcoded package id
+        // must match android/gradle.properties export_package_name.
+        try
+        {
+            const string tmpDir =
+                "/data/user/0/com.game.sts2launcher.modmanager/cache/MonoMod";
+            Directory.CreateDirectory(tmpDir);
+            System.Environment.SetEnvironmentVariable("TMPDIR", tmpDir);
+            int cleaned = TryCleanStaleMonoModFiles(tmpDir);
+            Console.Error.WriteLine(
+                $"[STS2Mobile] [Diag] TMPDIR -> {tmpDir} (cleaned {cleaned} stale)"
+            );
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine(
+                $"[STS2Mobile] [Diag] TMPDIR override failed: {ex.Message}"
+            );
+        }
+
         PatchHelper.Log("Initializing STS2Mobile...");
 
         _harmony = new Harmony("com.sts2mobile");
@@ -98,6 +125,33 @@ public static class ModEntry
             PatchHelper.Log($"Game patches skipped (files not present): {ex.Message}");
             ScheduleStandaloneLauncher();
         }
+    }
+
+    private static int TryCleanStaleMonoModFiles(string dir)
+    {
+        int cleaned = 0;
+        try
+        {
+            var cutoff = DateTime.UtcNow.AddDays(-7);
+            foreach (var f in Directory.EnumerateFiles(dir, "MonoMod_*"))
+            {
+                try
+                {
+                    if (File.GetLastWriteTimeUtc(f) < cutoff)
+                    {
+                        File.Delete(f);
+                        cleaned++;
+                    }
+                }
+                catch
+                {
+                }
+            }
+        }
+        catch
+        {
+        }
+        return cleaned;
     }
 
     private static void ScheduleStandaloneLauncher()
