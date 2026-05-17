@@ -561,6 +561,14 @@ public static class LauncherPatches
                     local.SetLastModifiedTime(path, DateTimeOffset.UtcNow);
                     PatchHelper.Log($"[Cloud] Conflict apply: pushed {path}");
                 }
+                else if (IsEphemeralRunPath(path) && cloud.FileExists(path))
+                {
+                    // Issue #31: user chose "Keep Local" but local has no current_run
+                    // (run completed locally). Mirror that to cloud so the other device
+                    // doesn't see a zombie run.
+                    cloud.DeleteFile(path);
+                    PatchHelper.Log($"[Cloud] Conflict apply: deleted cloud {path} (local cleared run)");
+                }
             }
             else
             {
@@ -572,11 +580,47 @@ public static class LauncherPatches
                     local.SetLastModifiedTime(path, cloudTime);
                     PatchHelper.Log($"[Cloud] Conflict apply: pulled {path}");
                 }
+                else if (IsEphemeralRunPath(path) && local.FileExists(path))
+                {
+                    // Issue #31: user chose "Keep Cloud" but cloud has no current_run
+                    // (run completed on the other device). Mirror that locally so the
+                    // game doesn't show a "Continue" zombie run.
+                    CloudSyncCoordinator.DeleteEphemeralLocalWithBackup(local, path);
+                    PatchHelper.Log($"[Cloud] Conflict apply: deleted local {path} (cloud cleared run)");
+                }
             }
         }
         catch (Exception ex)
         {
+            // Issue #31: same stale-cache fallback as ManualPullAllAsync.
+            // FileExists may say cloud has it while ClientFileDownload returns
+            // FileNotFound — treat as authoritative cloud-empty signal.
+            if (!keepLocal
+                && IsEphemeralRunPath(path)
+                && ex.Message.Contains("FileNotFound", StringComparison.OrdinalIgnoreCase)
+                && local.FileExists(path))
+            {
+                try
+                {
+                    CloudSyncCoordinator.DeleteEphemeralLocalWithBackup(local, path);
+                    PatchHelper.Log($"[Cloud] Conflict apply: deleted local {path} (cloud stale-cache, actually gone)");
+                    return;
+                }
+                catch (Exception delEx)
+                {
+                    PatchHelper.Log($"[Cloud] Conflict apply: stale-cache delete failed for {path}: {delEx.Message}");
+                }
+            }
             PatchHelper.Log($"[Cloud] Conflict apply failed for {path}: {ex.Message}");
         }
+    }
+
+    // Issue #31: ephemeral per-run save files. Game deletes these on run end;
+    // conflict resolution must mirror that deletion when the user picks the
+    // side that lacks the file.
+    private static bool IsEphemeralRunPath(string path)
+    {
+        var lower = path.Replace("user://", "").Replace("\\", "/").ToLowerInvariant();
+        return lower.EndsWith("/current_run.save") || lower.EndsWith("/current_run_mp.save");
     }
 }

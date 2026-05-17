@@ -174,12 +174,21 @@ public static class CloudSyncCoordinator
 
         cloudStore.BeginSaveBatch();
         int count = 0;
+        int deletedCloud = 0;
         foreach (var path in paths)
         {
             try
             {
                 if (!localStore.FileExists(path))
+                {
+                    if (IsEphemeralRunFile(path) && cloudStore.FileExists(path))
+                    {
+                        cloudStore.DeleteFile(path);
+                        PatchHelper.Log($"[Cloud] Push: deleted cloud {path} (local cleared run)");
+                        deletedCloud++;
+                    }
                     continue;
+                }
 
                 string content = localStore.ReadFile(path);
                 PatchHelper.Log($"[Cloud] Push: queuing {path} ({content.Length} bytes)");
@@ -193,7 +202,7 @@ public static class CloudSyncCoordinator
         }
         cloudStore.EndSaveBatch();
 
-        PatchHelper.Log($"[Cloud] Push complete: {count} files batched for upload");
+        PatchHelper.Log($"[Cloud] Push complete: {count} files batched for upload, {deletedCloud} cloud files mirror-deleted");
     }
 
     public static async Task ManualPullAllAsync(string accountName, string refreshToken)
@@ -227,13 +236,23 @@ public static class CloudSyncCoordinator
 
         int downloaded = 0;
         int skipped = 0;
+        int deletedLocal = 0;
         foreach (var path in paths)
         {
             try
             {
                 if (!cloudStore.FileExists(path))
                 {
-                    skipped++;
+                    if (IsEphemeralRunFile(path) && localStore.FileExists(path))
+                    {
+                        DeleteEphemeralLocalWithBackup(localStore, path);
+                        PatchHelper.Log($"[Cloud] Pull: deleted local {path} (cloud cleared run)");
+                        deletedLocal++;
+                    }
+                    else
+                    {
+                        skipped++;
+                    }
                     continue;
                 }
                 PatchHelper.Log($"[Cloud] Pull: downloading {path}");
@@ -246,11 +265,35 @@ public static class CloudSyncCoordinator
             }
             catch (Exception ex)
             {
-                PatchHelper.Log($"[Cloud] Pull: failed for {path}: {ex.Message}");
+                // Issue #31: stale-cache fallback. Steam's EnumerateUserFiles RPC
+                // keeps remotely-deleted files in the manifest for a while after
+                // the actual storage is wiped, so cloudStore.FileExists can return
+                // true while ClientFileDownload returns FileNotFound. The download
+                // failure is the authoritative signal that cloud is empty — mirror
+                // that locally for ephemeral run files.
+                if (IsEphemeralRunFile(path)
+                    && ex.Message.Contains("FileNotFound", StringComparison.OrdinalIgnoreCase)
+                    && localStore.FileExists(path))
+                {
+                    try
+                    {
+                        DeleteEphemeralLocalWithBackup(localStore, path);
+                        deletedLocal++;
+                        PatchHelper.Log($"[Cloud] Pull: deleted local {path} (cloud stale-cache, actually gone)");
+                    }
+                    catch (Exception delEx)
+                    {
+                        PatchHelper.Log($"[Cloud] Pull: stale-cache delete failed for {path}: {delEx.Message}");
+                    }
+                }
+                else
+                {
+                    PatchHelper.Log($"[Cloud] Pull: failed for {path}: {ex.Message}");
+                }
             }
         }
 
-        PatchHelper.Log($"[Cloud] Pull complete: {downloaded} downloaded, {skipped} not in cloud");
+        PatchHelper.Log($"[Cloud] Pull complete: {downloaded} downloaded, {skipped} not in cloud, {deletedLocal} local files mirror-deleted");
     }
 
     public static List<string> GetSaveFilePaths(ISaveStore store)
@@ -331,6 +374,38 @@ public static class CloudSyncCoordinator
         return lower.Contains("progress.save")
             || lower.Contains("current_run")
             || lower.Contains("prefs");
+    }
+
+    // Issue #31: ephemeral per-run save files. The game deletes these from cloud
+    // when a run ends (clear/abandon) — manual Pull/Push must mirror that deletion
+    // to the other side so completed runs don't reappear as "Continue" zombies.
+    // progress.save is intentionally excluded: it's persistent meta progress and
+    // mirror-deleting it would risk catastrophic data loss on fresh-install pushes.
+    internal static bool IsEphemeralRunFile(string path)
+    {
+        var lower = path.Replace("user://", "").Replace("\\", "/").ToLowerInvariant();
+        return lower.EndsWith("/current_run.save") || lower.EndsWith("/current_run_mp.save");
+    }
+
+    // RunSaveManager keeps a .backup sibling per save and falls back to it when
+    // the primary is missing. Mirror-deleting the primary alone leaves the game
+    // restoring the run from the backup — we must remove both.
+    internal static void DeleteEphemeralLocalWithBackup(ISaveStore local, string path)
+    {
+        local.DeleteFile(path);
+        var backupPath = path + ".backup";
+        if (local.FileExists(backupPath))
+        {
+            try
+            {
+                local.DeleteFile(backupPath);
+                PatchHelper.Log($"[Cloud] Mirror-delete: also removed local {backupPath}");
+            }
+            catch (Exception ex)
+            {
+                PatchHelper.Log($"[Cloud] Mirror-delete: backup removal failed for {backupPath}: {ex.Message}");
+            }
+        }
     }
 
     public static void BackupSaveContent(string path, string content, string source)
