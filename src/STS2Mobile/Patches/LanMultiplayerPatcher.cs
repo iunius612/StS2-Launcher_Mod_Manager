@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.NetworkInformation;
@@ -421,40 +422,131 @@ public static class LanMultiplayerPatcher
     // launcher chooses it. Hardcoding 1000UL collides when 2+ clients join the
     // same host; a fresh random per-join broke save continuity (issue #26)
     // because the game records netId as player_id and rejects mismatched
-    // re-joins. Persist a per-device id in user:// so the same device always
-    // presents the same id across sessions.
-    private const string ClientIdConfigPath = "user://lan_client_id.cfg";
+    // re-joins. Persist a per-device id so the same device always presents the
+    // same id across sessions.
+    //
+    // 0.3.21: storage moved to external StS2LauncherMM/Config/ so users can
+    // inspect/edit without root or ADB (issue #26). user:// path kept as a
+    // backward-compat read source and as a write fallback when storage
+    // permission is denied.
+    private const string ClientIdConfigPathUser = "user://lan_client_id.cfg";
+
+    private static string ExternalClientIdConfigPath =>
+        Path.Combine(AppPaths.ExternalConfigDir, "lan_client_id.cfg");
 
     private static ulong LoadOrCreateClientNetId()
+    {
+        ulong? loaded = TryLoadClientNetId(ExternalClientIdConfigPath);
+        bool migrateToExternal = false;
+        if (!loaded.HasValue)
+        {
+            loaded = TryLoadClientNetId(ClientIdConfigPathUser);
+            // Opportunistic migration: if we read from the legacy internal
+            // location but external storage is now accessible, mirror the id
+            // out so the user can see/edit it on their next session.
+            if (loaded.HasValue && AppPaths.HasStoragePermission())
+                migrateToExternal = true;
+        }
+
+        if (loaded.HasValue)
+        {
+            if (migrateToExternal)
+            {
+                SaveClientNetId(loaded.Value);
+                PatchHelper.Log($"Migrated LAN client id to {ExternalClientIdConfigPath}");
+            }
+            return loaded.Value;
+        }
+
+        var fresh = GenerateClientNetId();
+        SaveClientNetId(fresh);
+        return fresh;
+    }
+
+    // Returns the stored id when valid under either the standard random-id
+    // floor (>= 1003UL) or the manual_override opt-in (1000-1002 inclusive).
+    // The opt-in covers the 1:1 LAN host case where vanilla PC's
+    // GetPlayerNamePrefix(1000) renders the mobile client as "Player2" in the
+    // host UI — without the override, our random ids show as raw numbers
+    // (issue #26 comment thread).
+    private static ulong? TryLoadClientNetId(string path)
     {
         try
         {
             var config = new ConfigFile();
-            if (config.Load(ClientIdConfigPath) == Error.Ok)
+            if (config.Load(path) != Error.Ok)
+                return null;
+
+            var stored = (string)config.GetValue("lan", "client_id", "");
+            if (string.IsNullOrEmpty(stored) || !ulong.TryParse(stored, out var parsed))
+                return null;
+
+            if (parsed >= 1003UL)
+                return parsed;
+
+            var manualOverride = (bool)config.GetValue("lan", "manual_override", false);
+            if (manualOverride && parsed >= 1000UL && parsed <= 1002UL)
             {
-                var stored = (string)config.GetValue("lan", "client_id", "");
-                if (!string.IsNullOrEmpty(stored) && ulong.TryParse(stored, out var parsed) && parsed >= 1003UL)
-                    return parsed;
+                PatchHelper.Log($"LAN client id: manual_override accepted ({parsed}) from {path}");
+                return parsed;
+            }
+
+            return null;
+        }
+        catch (Exception ex)
+        {
+            PatchHelper.Log($"LoadClientNetId from {path} error: {ex.Message}");
+            return null;
+        }
+    }
+
+    private static void SaveClientNetId(ulong id)
+    {
+        var preferExternal = AppPaths.HasStoragePermission();
+        var primary = preferExternal ? ExternalClientIdConfigPath : ClientIdConfigPathUser;
+
+        if (preferExternal)
+        {
+            try
+            {
+                Directory.CreateDirectory(AppPaths.ExternalConfigDir);
+            }
+            catch (Exception ex)
+            {
+                PatchHelper.Log($"SaveClientNetId: failed to create {AppPaths.ExternalConfigDir}: {ex.Message}");
+            }
+        }
+
+        try
+        {
+            var config = new ConfigFile();
+            config.SetValue("lan", "client_id", id.ToString());
+            if (config.Save(primary) == Error.Ok)
+            {
+                PatchHelper.Log($"Saved LAN client id {id} → {primary}");
+                return;
             }
         }
         catch (Exception ex)
         {
-            PatchHelper.Log($"LoadClientNetId error: {ex.Message}");
+            PatchHelper.Log($"SaveClientNetId to {primary} error: {ex.Message}");
         }
 
-        var fresh = GenerateClientNetId();
-        try
+        // Fallback to internal user:// if external write failed.
+        if (primary != ClientIdConfigPathUser)
         {
-            var config = new ConfigFile();
-            config.SetValue("lan", "client_id", fresh.ToString());
-            config.Save(ClientIdConfigPath);
-            PatchHelper.Log($"Generated persistent LAN client id: {fresh}");
+            try
+            {
+                var config = new ConfigFile();
+                config.SetValue("lan", "client_id", id.ToString());
+                config.Save(ClientIdConfigPathUser);
+                PatchHelper.Log($"Saved LAN client id {id} → {ClientIdConfigPathUser} (fallback)");
+            }
+            catch (Exception ex)
+            {
+                PatchHelper.Log($"SaveClientNetId fallback error: {ex.Message}");
+            }
         }
-        catch (Exception ex)
-        {
-            PatchHelper.Log($"SaveClientNetId error: {ex.Message}");
-        }
-        return fresh;
     }
 
     private static ulong GenerateClientNetId()

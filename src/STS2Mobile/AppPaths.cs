@@ -16,6 +16,8 @@ public static class AppPaths
     public const string ExternalModsDir = ExternalRoot + "/Mods";
     public const string ExternalSaveBackupsDir = ExternalRoot + "/Saves";
     public const string ExternalLogsDir = ExternalRoot + "/Logs";
+    // User-editable configs that need to be reachable without root/ADB (issue #26).
+    public const string ExternalConfigDir = ExternalRoot + "/Config";
     public const string ExternalModConfigFile = ExternalModsDir + "/mod_config.json";
 
     // Returns true if the app has permission to write to shared external storage.
@@ -68,6 +70,11 @@ public static class AppPaths
         try
         {
             Directory.CreateDirectory(ExternalLogsDir);
+        }
+        catch { }
+        try
+        {
+            Directory.CreateDirectory(ExternalConfigDir);
         }
         catch { }
     }
