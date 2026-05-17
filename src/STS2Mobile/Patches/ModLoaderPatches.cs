@@ -37,8 +37,9 @@ public static class ModLoaderPatches
         IEnumerable<CodeInstruction> instructions
     )
     {
-        var matcher = new CodeMatcher(instructions)
-            .MatchStartForward(new CodeMatch(OpCodes.Ldstr, "mods"));
+        var matcher = new CodeMatcher(instructions).MatchStartForward(
+            new CodeMatch(OpCodes.Ldstr, "mods")
+        );
 
         if (matcher.IsValid)
         {
@@ -46,10 +47,10 @@ public static class ModLoaderPatches
             // Drop all three and push the external path literal instead.
             matcher.Advance(-1);
             matcher.RemoveInstructions(3);
-            matcher.InsertAndAdvance(
-                new CodeInstruction(OpCodes.Ldstr, AppPaths.ExternalModsDir)
+            matcher.InsertAndAdvance(new CodeInstruction(OpCodes.Ldstr, AppPaths.ExternalModsDir));
+            PatchHelper.Log(
+                $"[Mods] Redirected ModManager.Initialize to {AppPaths.ExternalModsDir}"
             );
-            PatchHelper.Log($"[Mods] Redirected ModManager.Initialize to {AppPaths.ExternalModsDir}");
         }
         else
         {

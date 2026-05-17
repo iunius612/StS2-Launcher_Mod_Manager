@@ -14,6 +14,7 @@ public class BranchPickerDialog : ColorRect
 {
     public event Action<string> BranchConfirmed;
     public event Action Cancelled;
+
     // Issue #23 — secondary footer button. Surfaces the manual atlas-cache wipe
     // path for users hitting carded/relic/potion image-index regression after a
     // game update. The dialog closes itself before raising the event; the

@@ -513,7 +513,9 @@ public static class LanMultiplayerPatcher
             }
             catch (Exception ex)
             {
-                PatchHelper.Log($"SaveClientNetId: failed to create {AppPaths.ExternalConfigDir}: {ex.Message}");
+                PatchHelper.Log(
+                    $"SaveClientNetId: failed to create {AppPaths.ExternalConfigDir}: {ex.Message}"
+                );
             }
         }
 
@@ -594,9 +596,7 @@ public static class LanMultiplayerPatcher
         try
         {
             var netId = LoadOrCreateClientNetId();
-            var connInit = _eNetClientConnInitCtor.Invoke(
-                new object[] { netId, ip, (ushort)port }
-            );
+            var connInit = _eNetClientConnInitCtor.Invoke(new object[] { netId, ip, (ushort)port });
             var task = _joinGameAsyncMethod.Invoke(screen, new object[] { connInit });
             _taskHelperRunSafely?.Invoke(null, new object[] { task });
 

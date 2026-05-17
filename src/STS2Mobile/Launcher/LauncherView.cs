@@ -74,9 +74,7 @@ public class LauncherView
                 // after the keyboard dismisses. The panel is a FullRect-anchored
                 // CenterContainer so its natural position stays (0,0) regardless
                 // of viewport size — the initial capture is enough.
-                PatchHelper.Log(
-                    $"[Launcher] Viewport SizeChanged -> {newSize}; panel resized"
-                );
+                PatchHelper.Log($"[Launcher] Viewport SizeChanged -> {newSize}; panel resized");
             };
 
         var hbox = new HBoxContainer();
@@ -161,7 +159,10 @@ public class LauncherView
         logHeader.AddChild(logTitle);
 
         DebugButton = new StyledButton("Debug: OFF", scale, fontSize: 11, height: 28);
-        DebugButton.CustomMinimumSize = new Vector2((int)(110 * scale), DebugButton.CustomMinimumSize.Y);
+        DebugButton.CustomMinimumSize = new Vector2(
+            (int)(110 * scale),
+            DebugButton.CustomMinimumSize.Y
+        );
         logHeader.AddChild(DebugButton);
 
         Log = new LogView(scale);

@@ -71,7 +71,14 @@ public class ModConfig
         foreach (var id in scannedIds)
         {
             if (known.Add(id))
-                Mods.Add(new ModConfigEntry { Id = id, Enabled = true, Order = nextOrder++ });
+                Mods.Add(
+                    new ModConfigEntry
+                    {
+                        Id = id,
+                        Enabled = true,
+                        Order = nextOrder++,
+                    }
+                );
         }
 
         Mods = Mods.OrderBy(m => m.Order).ToList();
@@ -93,7 +100,14 @@ public class ModConfig
             return;
         }
         var nextOrder = Mods.Count == 0 ? 0 : Mods.Max(m => m.Order) + 1;
-        Mods.Add(new ModConfigEntry { Id = id, Enabled = enabled, Order = nextOrder });
+        Mods.Add(
+            new ModConfigEntry
+            {
+                Id = id,
+                Enabled = enabled,
+                Order = nextOrder,
+            }
+        );
     }
 
     public void Remove(string id) => Mods.RemoveAll(m => m.Id == id);

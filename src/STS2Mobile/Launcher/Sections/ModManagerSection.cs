@@ -244,10 +244,11 @@ public class ModManagerSection : VBoxContainer
         PatchHelper.Log($"[Mods] ImportSequentially enter index={index}/{zipPaths.Length}");
         if (index >= zipPaths.Length)
         {
-            var msg = zipPaths.Length == 1
-                ? (imported == 1 ? $"Imported 1 mod." : "Import failed.")
-                : $"Imported {imported} / {zipPaths.Length} mod(s)" +
-                  (failed > 0 ? $" ({failed} failed)." : ".");
+            var msg =
+                zipPaths.Length == 1
+                    ? (imported == 1 ? $"Imported 1 mod." : "Import failed.")
+                    : $"Imported {imported} / {zipPaths.Length} mod(s)"
+                        + (failed > 0 ? $" ({failed} failed)." : ".");
             FinishImport(msg, error: imported == 0, refresh: imported > 0);
             return;
         }
@@ -275,20 +276,25 @@ public class ModManagerSection : VBoxContainer
                     {
                         ConfirmationRequested?.Invoke(
                             $"'{result.ModId}' is already installed. Overwrite?",
-                            () => _ = Task.Run(async () =>
-                            {
-                                var overwritten = await ModImporter.ImportZipAsync(zipPath, overwrite: true);
-                                if (overwritten.Success)
-                                    imp++;
-                                else
-                                    fail++;
-                                await ImportSequentially(zipPaths, idx + 1, imp, fail);
-                            }),
-                            () => _ = Task.Run(async () =>
-                            {
-                                ModImporter.CleanupImportZip(zipPath);
-                                await ImportSequentially(zipPaths, idx + 1, imp, fail + 1);
-                            })
+                            () =>
+                                _ = Task.Run(async () =>
+                                {
+                                    var overwritten = await ModImporter.ImportZipAsync(
+                                        zipPath,
+                                        overwrite: true
+                                    );
+                                    if (overwritten.Success)
+                                        imp++;
+                                    else
+                                        fail++;
+                                    await ImportSequentially(zipPaths, idx + 1, imp, fail);
+                                }),
+                            () =>
+                                _ = Task.Run(async () =>
+                                {
+                                    ModImporter.CleanupImportZip(zipPath);
+                                    await ImportSequentially(zipPaths, idx + 1, imp, fail + 1);
+                                })
                         );
                     })
                     .CallDeferred();
@@ -311,10 +317,7 @@ public class ModManagerSection : VBoxContainer
 
     private void FinishImport(string message, bool error, bool refresh)
     {
-        SetStatus(
-            message,
-            error ? new Color(0.95f, 0.4f, 0.4f) : new Color(0.75f, 0.75f, 0.8f)
-        );
+        SetStatus(message, error ? new Color(0.95f, 0.4f, 0.4f) : new Color(0.75f, 0.75f, 0.8f));
         _importInFlight = false;
         Callable
             .From(() =>

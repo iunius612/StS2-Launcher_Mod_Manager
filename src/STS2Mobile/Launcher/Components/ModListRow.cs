@@ -21,7 +21,13 @@ public class ModListRow : PanelContainer
     private readonly Button _infoButton;
     private readonly VBoxContainer _detail;
 
-    public ModListRow(ModEntryInfo info, bool enabled, bool canMoveUp, bool canMoveDown, float scale)
+    public ModListRow(
+        ModEntryInfo info,
+        bool enabled,
+        bool canMoveUp,
+        bool canMoveDown,
+        float scale
+    )
     {
         ModId = info.Id;
 

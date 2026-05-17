@@ -201,8 +201,7 @@ public static class LauncherPatches
             {
                 var existing = SteamKit2CloudSaveStore.Instance;
                 var cloudStore =
-                    existing
-                    ?? new SteamKit2CloudSaveStore(SavedAccountName, SavedRefreshToken);
+                    existing ?? new SteamKit2CloudSaveStore(SavedAccountName, SavedRefreshToken);
 
                 _cloudCacheReady = await cloudStore.WaitForCacheReadyAsync(15_000);
                 if (_cloudCacheReady)
@@ -299,9 +298,7 @@ public static class LauncherPatches
             LocalSummary = rawDecision.LocalSummary ?? new SaveProgressSummary(),
             CloudSummary = rawDecision.CloudSummary ?? new SaveProgressSummary(),
         };
-        PatchHelper.Log(
-            $"[Cloud] Save Manager: opening dialog (decision={rawDecision.Decision})"
-        );
+        PatchHelper.Log($"[Cloud] Save Manager: opening dialog (decision={rawDecision.Decision})");
         Issue7Diagnostics.LogDialogSummary(
             "SaveManagerButton",
             displayDecision.Decision,
@@ -471,9 +468,7 @@ public static class LauncherPatches
 
             if (localContent != cloudContent)
             {
-                PatchHelper.Log(
-                    $"[Cloud] Verify: content mismatch (same size, different bytes)"
-                );
+                PatchHelper.Log($"[Cloud] Verify: content mismatch (same size, different bytes)");
                 return false;
             }
 
@@ -520,15 +515,21 @@ public static class LauncherPatches
                 for (int profile = 1; profile <= 3; profile++)
                 {
                     await ApplyOneAsync(
-                        local, cloud, keepLocal,
+                        local,
+                        cloud,
+                        keepLocal,
                         ProgressSaveManager.GetProgressPathForProfile(profile)
                     );
                     await ApplyOneAsync(
-                        local, cloud, keepLocal,
+                        local,
+                        cloud,
+                        keepLocal,
                         RunSaveManager.GetRunSavePath(profile, "current_run.save")
                     );
                     await ApplyOneAsync(
-                        local, cloud, keepLocal,
+                        local,
+                        cloud,
+                        keepLocal,
                         RunSaveManager.GetRunSavePath(profile, "current_run_mp.save")
                     );
                 }
@@ -567,7 +568,9 @@ public static class LauncherPatches
                     // (run completed locally). Mirror that to cloud so the other device
                     // doesn't see a zombie run.
                     cloud.DeleteFile(path);
-                    PatchHelper.Log($"[Cloud] Conflict apply: deleted cloud {path} (local cleared run)");
+                    PatchHelper.Log(
+                        $"[Cloud] Conflict apply: deleted cloud {path} (local cleared run)"
+                    );
                 }
             }
             else
@@ -586,7 +589,9 @@ public static class LauncherPatches
                     // (run completed on the other device). Mirror that locally so the
                     // game doesn't show a "Continue" zombie run.
                     CloudSyncCoordinator.DeleteEphemeralLocalWithBackup(local, path);
-                    PatchHelper.Log($"[Cloud] Conflict apply: deleted local {path} (cloud cleared run)");
+                    PatchHelper.Log(
+                        $"[Cloud] Conflict apply: deleted local {path} (cloud cleared run)"
+                    );
                 }
             }
         }
@@ -595,20 +600,26 @@ public static class LauncherPatches
             // Issue #31: same stale-cache fallback as ManualPullAllAsync.
             // FileExists may say cloud has it while ClientFileDownload returns
             // FileNotFound — treat as authoritative cloud-empty signal.
-            if (!keepLocal
+            if (
+                !keepLocal
                 && IsEphemeralRunPath(path)
                 && ex.Message.Contains("FileNotFound", StringComparison.OrdinalIgnoreCase)
-                && local.FileExists(path))
+                && local.FileExists(path)
+            )
             {
                 try
                 {
                     CloudSyncCoordinator.DeleteEphemeralLocalWithBackup(local, path);
-                    PatchHelper.Log($"[Cloud] Conflict apply: deleted local {path} (cloud stale-cache, actually gone)");
+                    PatchHelper.Log(
+                        $"[Cloud] Conflict apply: deleted local {path} (cloud stale-cache, actually gone)"
+                    );
                     return;
                 }
                 catch (Exception delEx)
                 {
-                    PatchHelper.Log($"[Cloud] Conflict apply: stale-cache delete failed for {path}: {delEx.Message}");
+                    PatchHelper.Log(
+                        $"[Cloud] Conflict apply: stale-cache delete failed for {path}: {delEx.Message}"
+                    );
                 }
             }
             PatchHelper.Log($"[Cloud] Conflict apply failed for {path}: {ex.Message}");

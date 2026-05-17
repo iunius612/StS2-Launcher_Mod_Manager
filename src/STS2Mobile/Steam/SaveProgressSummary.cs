@@ -82,28 +82,51 @@ public class SaveProgressSummary
             if (root.ValueKind != JsonValueKind.Object)
                 return summary;
 
-            if (root.TryGetProperty("schema_version", out var sv) && sv.ValueKind == JsonValueKind.Number)
+            if (
+                root.TryGetProperty("schema_version", out var sv)
+                && sv.ValueKind == JsonValueKind.Number
+            )
                 summary.SchemaVersion = sv.GetInt32();
 
-            if (root.TryGetProperty("floors_climbed", out var fc) && fc.ValueKind == JsonValueKind.Number)
+            if (
+                root.TryGetProperty("floors_climbed", out var fc)
+                && fc.ValueKind == JsonValueKind.Number
+            )
                 summary.FloorsClimbed = fc.GetInt32();
 
-            if (root.TryGetProperty("total_playtime", out var tp) && tp.ValueKind == JsonValueKind.Number)
+            if (
+                root.TryGetProperty("total_playtime", out var tp)
+                && tp.ValueKind == JsonValueKind.Number
+            )
                 summary.TotalPlaytimeSeconds = tp.GetInt32();
 
-            if (root.TryGetProperty("character_stats", out var cs) && cs.ValueKind == JsonValueKind.Array)
+            if (
+                root.TryGetProperty("character_stats", out var cs)
+                && cs.ValueKind == JsonValueKind.Array
+            )
             {
                 summary.CharactersTracked = cs.GetArrayLength();
-                int wins = 0, losses = 0, maxAsc = 0;
+                int wins = 0,
+                    losses = 0,
+                    maxAsc = 0;
                 foreach (var c in cs.EnumerateArray())
                 {
                     if (c.ValueKind != JsonValueKind.Object)
                         continue;
-                    if (c.TryGetProperty("total_wins", out var w) && w.ValueKind == JsonValueKind.Number)
+                    if (
+                        c.TryGetProperty("total_wins", out var w)
+                        && w.ValueKind == JsonValueKind.Number
+                    )
                         wins += w.GetInt32();
-                    if (c.TryGetProperty("total_losses", out var l) && l.ValueKind == JsonValueKind.Number)
+                    if (
+                        c.TryGetProperty("total_losses", out var l)
+                        && l.ValueKind == JsonValueKind.Number
+                    )
                         losses += l.GetInt32();
-                    if (c.TryGetProperty("max_ascension", out var a) && a.ValueKind == JsonValueKind.Number)
+                    if (
+                        c.TryGetProperty("max_ascension", out var a)
+                        && a.ValueKind == JsonValueKind.Number
+                    )
                         maxAsc = Math.Max(maxAsc, a.GetInt32());
                 }
                 summary.TotalWins = wins;

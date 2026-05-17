@@ -65,8 +65,7 @@ public static class ModEntry
         // must match android/gradle.properties export_package_name.
         try
         {
-            const string tmpDir =
-                "/data/user/0/com.game.sts2launcher.modmanager/cache/MonoMod";
+            const string tmpDir = "/data/user/0/com.game.sts2launcher.modmanager/cache/MonoMod";
             Directory.CreateDirectory(tmpDir);
             System.Environment.SetEnvironmentVariable("TMPDIR", tmpDir);
             int cleaned = TryCleanStaleMonoModFiles(tmpDir);
@@ -76,9 +75,7 @@ public static class ModEntry
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine(
-                $"[STS2Mobile] [Diag] TMPDIR override failed: {ex.Message}"
-            );
+            Console.Error.WriteLine($"[STS2Mobile] [Diag] TMPDIR override failed: {ex.Message}");
         }
 
         PatchHelper.Log("Initializing STS2Mobile...");
@@ -143,14 +140,10 @@ public static class ModEntry
                         cleaned++;
                     }
                 }
-                catch
-                {
-                }
+                catch { }
             }
         }
-        catch
-        {
-        }
+        catch { }
         return cleaned;
     }
 

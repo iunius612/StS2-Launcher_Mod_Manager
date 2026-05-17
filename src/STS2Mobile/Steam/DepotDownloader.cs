@@ -61,7 +61,10 @@ public class DepotDownloader : IDisposable
     }
 
     // Returns true if any depot has a newer manifest than what's cached locally.
-    public async Task<bool> CheckForUpdatesAsync(string branch = "public", CancellationToken ct = default)
+    public async Task<bool> CheckForUpdatesAsync(
+        string branch = "public",
+        CancellationToken ct = default
+    )
     {
         _connection.SuspendIdleTimeout();
         try
@@ -172,10 +175,7 @@ public class DepotDownloader : IDisposable
                     IsPasswordProtected = node["pwdrequired"]?.Value == "1",
                 };
 
-                if (
-                    node["timeupdated"]?.Value is string ts
-                    && long.TryParse(ts, out var unix)
-                )
+                if (node["timeupdated"]?.Value is string ts && long.TryParse(ts, out var unix))
                 {
                     info.TimeUpdatedUtc = DateTimeOffset.FromUnixTimeSeconds(unix).UtcDateTime;
                 }

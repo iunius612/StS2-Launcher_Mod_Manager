@@ -83,7 +83,12 @@ public class ActionSection : VBoxContainer
         _gameUpdateButton.Pressed += () => CheckGameUpdatePressed?.Invoke();
         AddChild(_gameUpdateButton);
 
-        _launcherUpdateButton = new StyledButton("CHECK LAUNCHER UPDATE", scale, fontSize: 16, height: 48);
+        _launcherUpdateButton = new StyledButton(
+            "CHECK LAUNCHER UPDATE",
+            scale,
+            fontSize: 16,
+            height: 48
+        );
         _launcherUpdateButton.Visible = false;
         _launcherUpdateButton.Pressed += () => CheckLauncherUpdatePressed?.Invoke();
         AddChild(_launcherUpdateButton);

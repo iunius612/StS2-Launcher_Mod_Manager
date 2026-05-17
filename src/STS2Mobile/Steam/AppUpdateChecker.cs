@@ -54,7 +54,9 @@ public static class AppUpdateChecker
         if (CompareVersions(latestVersion, installedVersion) <= 0)
             return AppUpdateResult.None;
 
-        var releaseBody = root.TryGetProperty("body", out var bodyProp) ? bodyProp.GetString() : null;
+        var releaseBody = root.TryGetProperty("body", out var bodyProp)
+            ? bodyProp.GetString()
+            : null;
         var releaseNotes = ReleaseNotes.ExtractDialogBody(releaseBody);
 
         string downloadUrl = null;
@@ -81,7 +83,8 @@ public static class AppUpdateChecker
         try
         {
             var jcw = Engine.GetSingleton("JavaClassWrapper");
-            var wrapper = (GodotObject)jcw.Call("wrap", "com.game.sts2launcher.modmanager.GodotApp");
+            var wrapper = (GodotObject)
+                jcw.Call("wrap", "com.game.sts2launcher.modmanager.GodotApp");
             var godotApp = (GodotObject)wrapper.Call("getInstance");
             return (string)godotApp.Call("getVersionName");
         }

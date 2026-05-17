@@ -299,9 +299,7 @@ public class LauncherModel : IDisposable
             downloader.LogMessage += msg => DownloadLogReceived?.Invoke(msg);
             var resolvedBranch = branch ?? LoadSelectedBranch();
 
-            bool hasUpdate = await Task.Run(
-                () => downloader.CheckForUpdatesAsync(resolvedBranch)
-            );
+            bool hasUpdate = await Task.Run(() => downloader.CheckForUpdatesAsync(resolvedBranch));
             downloader.Dispose();
 
             UpdateCheckCompleted?.Invoke(hasUpdate);
@@ -494,7 +492,6 @@ public class LauncherModel : IDisposable
         return "public";
     }
 
-
     public static void SaveSelectedBranch(string branch)
     {
         try
@@ -534,7 +531,8 @@ public class LauncherModel : IDisposable
         try
         {
             var jcw = Engine.GetSingleton("JavaClassWrapper");
-            var wrapper = (GodotObject)jcw.Call("wrap", "com.game.sts2launcher.modmanager.GodotApp");
+            var wrapper = (GodotObject)
+                jcw.Call("wrap", "com.game.sts2launcher.modmanager.GodotApp");
             return (GodotObject)wrapper.Call("getInstance");
         }
         catch

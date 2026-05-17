@@ -213,7 +213,9 @@ public static class CloudSyncDecisions
                         localSummary = BuildSummary(
                             () => localSize > 0 ? local.ReadFile(path) : null,
                             localSize,
-                            localSize > 0 ? local.GetLastModifiedTime(path) : DateTimeOffset.MinValue,
+                            localSize > 0
+                                ? local.GetLastModifiedTime(path)
+                                : DateTimeOffset.MinValue,
                             () => localRunSize > 0 ? local.ReadFile(runPath) : null,
                             localRunSize,
                             localRunSize > 0
@@ -240,8 +242,20 @@ public static class CloudSyncDecisions
                     if (profileDiffers)
                     {
                         diffSlots++;
-                        firstDiffLocal ??= localSummary ?? new SaveProgressSummary { ProfileNumber = profile, IsModded = modded };
-                        firstDiffCloud ??= cloudSummary ?? new SaveProgressSummary { ProfileNumber = profile, IsModded = modded };
+                        firstDiffLocal ??=
+                            localSummary
+                            ?? new SaveProgressSummary
+                            {
+                                ProfileNumber = profile,
+                                IsModded = modded,
+                            };
+                        firstDiffCloud ??=
+                            cloudSummary
+                            ?? new SaveProgressSummary
+                            {
+                                ProfileNumber = profile,
+                                IsModded = modded,
+                            };
                     }
                     if (localSummary?.HasCurrentRun == true)
                         firstRunLocal ??= localSummary;
@@ -362,7 +376,9 @@ public static class CloudSyncDecisions
             }
             catch (Exception ex)
             {
-                PatchHelper.Log($"[Cloud] Decision: {sideLabel} current_run read failed: {ex.Message}");
+                PatchHelper.Log(
+                    $"[Cloud] Decision: {sideLabel} current_run read failed: {ex.Message}"
+                );
             }
         }
         return summary;

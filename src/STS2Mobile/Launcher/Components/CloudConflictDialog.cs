@@ -2,6 +2,7 @@ using System;
 using System.Threading.Tasks;
 using Godot;
 using STS2Mobile.Steam;
+
 // SyncDecision is in STS2Mobile.Steam — already imported above.
 
 namespace STS2Mobile.Launcher.Components;
@@ -20,8 +21,9 @@ public enum CloudConflictChoice
 // the launcher can await the user's decision before continuing into the game.
 public class CloudConflictDialog : ColorRect
 {
-    private readonly TaskCompletionSource<CloudConflictChoice> _result =
-        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource<CloudConflictChoice> _result = new(
+        TaskCreationOptions.RunContinuationsAsynchronously
+    );
 
     public Task<CloudConflictChoice> Result => _result.Task;
 
@@ -162,7 +164,9 @@ public class CloudConflictDialog : ColorRect
         cardsRow.Alignment = BoxContainer.AlignmentMode.Center;
         vbox.AddChild(cardsRow);
 
-        cardsRow.AddChild(BuildSummaryCard("📱  이 디바이스 (로컬)", local, localIsMoreRecent, scale, sz));
+        cardsRow.AddChild(
+            BuildSummaryCard("📱  이 디바이스 (로컬)", local, localIsMoreRecent, scale, sz)
+        );
         cardsRow.AddChild(BuildSummaryCard("☁  Steam Cloud", cloud, !localIsMoreRecent, scale, sz));
 
         // No "remember my choice" checkbox by design: which side is correct

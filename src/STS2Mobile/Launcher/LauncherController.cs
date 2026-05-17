@@ -194,7 +194,9 @@ public class LauncherController
 
     private void ShowLaunchStage(string text, bool showCloudSync, bool showUpdate)
     {
-        PatchHelper.Log($"[Mods] ShowLaunchStage fired (text='{text}', inGameMode={_model.InGameMode})");
+        PatchHelper.Log(
+            $"[Mods] ShowLaunchStage fired (text='{text}', inGameMode={_model.InGameMode})"
+        );
         var firstShow = !_launchStageShown;
         _launchStageShown = true;
         _lastLaunchText = text;
@@ -229,9 +231,8 @@ public class LauncherController
             {
                 var lines = File.ReadAllLines(updateMarker);
                 var fakeVersion = lines.Length > 0 ? lines[0] : "0.0.0";
-                var fakeBody = lines.Length > 1
-                    ? string.Join("\n", lines, 1, lines.Length - 1)
-                    : "";
+                var fakeBody =
+                    lines.Length > 1 ? string.Join("\n", lines, 1, lines.Length - 1) : "";
                 var fakeNotes = ReleaseNotes.ExtractDialogBody(fakeBody);
                 var fakeResult = new AppUpdateResult(
                     fakeVersion,
@@ -242,7 +243,6 @@ public class LauncherController
                 PatchHelper.Log("[Debug] Forcing PromptLauncherUpdate via debug intent");
                 PromptLauncherUpdate(fakeResult);
             }
-
         }
         catch (Exception ex)
         {
@@ -278,7 +278,9 @@ public class LauncherController
 
     public void OnModManagerBackPressed()
     {
-        PatchHelper.Log($"[Mods] Back pressed (launchStageShown={_launchStageShown}, sessionState={_model.SessionState})");
+        PatchHelper.Log(
+            $"[Mods] Back pressed (launchStageShown={_launchStageShown}, sessionState={_model.SessionState})"
+        );
         // Must hide mod manager first, otherwise UpdateUI's ModManager.Visible guard
         // refuses to redraw — that was making BACK a no-op.
         _view.ModManager.Visible = false;
@@ -578,7 +580,9 @@ public class LauncherController
             return;
         }
 
-        PatchHelper.Log($"[Launcher] Update check result: HasUpdate={result.HasUpdate}, latest={result.LatestVersion}");
+        PatchHelper.Log(
+            $"[Launcher] Update check result: HasUpdate={result.HasUpdate}, latest={result.LatestVersion}"
+        );
 
         if (!result.HasUpdate)
         {
@@ -651,7 +655,9 @@ public class LauncherController
         dialog.Cancelled += () => cts.Cancel();
 
         var progress = new Progress<ApkDownloadProgress>(p =>
-            _runOnMainThread(() => dialog.SetProgress(p.DownloadedBytes, p.TotalBytes, p.Percentage))
+            _runOnMainThread(() =>
+                dialog.SetProgress(p.DownloadedBytes, p.TotalBytes, p.Percentage)
+            )
         );
 
         Task.Run(async () =>
@@ -666,7 +672,9 @@ public class LauncherController
                 _runOnMainThread(() =>
                 {
                     dialog.Close();
-                    _view.AppendLog($"Launcher update v{result.LatestVersion} downloaded; opening installer...");
+                    _view.AppendLog(
+                        $"Launcher update v{result.LatestVersion} downloaded; opening installer..."
+                    );
                     AppUpdateInstaller.LaunchInstall(apkPath);
                 });
             }

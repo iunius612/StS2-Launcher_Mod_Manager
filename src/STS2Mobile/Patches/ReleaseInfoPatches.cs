@@ -87,9 +87,7 @@ public static class ReleaseInfoPatches
             var version = (string)node["version"] ?? string.Empty;
             var branch = (string)node["branch"] ?? string.Empty;
             var dateStr = (string)node["date"];
-            DateTime date = DateTime.TryParse(dateStr, out var parsed)
-                ? parsed
-                : DateTime.UtcNow;
+            DateTime date = DateTime.TryParse(dateStr, out var parsed) ? parsed : DateTime.UtcNow;
 
             __result = new ReleaseInfo
             {

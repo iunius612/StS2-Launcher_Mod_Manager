@@ -16,6 +16,7 @@ public static class AppPaths
     public const string ExternalModsDir = ExternalRoot + "/Mods";
     public const string ExternalSaveBackupsDir = ExternalRoot + "/Saves";
     public const string ExternalLogsDir = ExternalRoot + "/Logs";
+
     // User-editable configs that need to be reachable without root/ADB (issue #26).
     public const string ExternalConfigDir = ExternalRoot + "/Config";
     public const string ExternalModConfigFile = ExternalModsDir + "/mod_config.json";
@@ -84,7 +85,8 @@ public static class AppPaths
         try
         {
             var jcw = Engine.GetSingleton("JavaClassWrapper");
-            var wrapper = (GodotObject)jcw.Call("wrap", "com.game.sts2launcher.modmanager.GodotApp");
+            var wrapper = (GodotObject)
+                jcw.Call("wrap", "com.game.sts2launcher.modmanager.GodotApp");
             return (GodotObject)wrapper.Call("getInstance");
         }
         catch

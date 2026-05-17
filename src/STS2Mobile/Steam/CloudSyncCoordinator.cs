@@ -99,7 +99,12 @@ public static class CloudSyncCoordinator
                 if (result == CompareResult.CloudWins)
                 {
                     PatchHelper.Log($"[Cloud] Sync: cloud wins for {path}");
-                    Issue7Diagnostics.LogCurrentRunSyncDetail(path, localContent, cloudContent, "CloudWins");
+                    Issue7Diagnostics.LogCurrentRunSyncDetail(
+                        path,
+                        localContent,
+                        cloudContent,
+                        "CloudWins"
+                    );
                     BackupProgressFile(local, path);
                     var cloudTime = cloud.GetLastModifiedTime(path);
                     await local.WriteFileAsync(path, cloudContent);
@@ -108,7 +113,12 @@ public static class CloudSyncCoordinator
                 else if (result == CompareResult.LocalWins)
                 {
                     PatchHelper.Log($"[Cloud] Sync: local wins for {path}, uploading");
-                    Issue7Diagnostics.LogCurrentRunSyncDetail(path, localContent, cloudContent, "LocalWins");
+                    Issue7Diagnostics.LogCurrentRunSyncDetail(
+                        path,
+                        localContent,
+                        cloudContent,
+                        "LocalWins"
+                    );
                     BackupProgressContent(path, cloudContent, "cloud");
                     cloud.WriteFile(path, localContent);
                 }
@@ -116,7 +126,12 @@ public static class CloudSyncCoordinator
                 {
                     // Cloud wins on equal progress or non-progress files to preserve PC as primary.
                     PatchHelper.Log($"[Cloud] Sync: contents differ for {path}, cloud wins");
-                    Issue7Diagnostics.LogCurrentRunSyncDetail(path, localContent, cloudContent, "EqualOrNonProgress→CloudWins");
+                    Issue7Diagnostics.LogCurrentRunSyncDetail(
+                        path,
+                        localContent,
+                        cloudContent,
+                        "EqualOrNonProgress→CloudWins"
+                    );
                     BackupProgressFile(local, path);
                     var cloudTime = cloud.GetLastModifiedTime(path);
                     await local.WriteFileAsync(path, cloudContent);
@@ -202,7 +217,9 @@ public static class CloudSyncCoordinator
         }
         cloudStore.EndSaveBatch();
 
-        PatchHelper.Log($"[Cloud] Push complete: {count} files batched for upload, {deletedCloud} cloud files mirror-deleted");
+        PatchHelper.Log(
+            $"[Cloud] Push complete: {count} files batched for upload, {deletedCloud} cloud files mirror-deleted"
+        );
     }
 
     public static async Task ManualPullAllAsync(string accountName, string refreshToken)
@@ -271,19 +288,25 @@ public static class CloudSyncCoordinator
                 // true while ClientFileDownload returns FileNotFound. The download
                 // failure is the authoritative signal that cloud is empty — mirror
                 // that locally for ephemeral run files.
-                if (IsEphemeralRunFile(path)
+                if (
+                    IsEphemeralRunFile(path)
                     && ex.Message.Contains("FileNotFound", StringComparison.OrdinalIgnoreCase)
-                    && localStore.FileExists(path))
+                    && localStore.FileExists(path)
+                )
                 {
                     try
                     {
                         DeleteEphemeralLocalWithBackup(localStore, path);
                         deletedLocal++;
-                        PatchHelper.Log($"[Cloud] Pull: deleted local {path} (cloud stale-cache, actually gone)");
+                        PatchHelper.Log(
+                            $"[Cloud] Pull: deleted local {path} (cloud stale-cache, actually gone)"
+                        );
                     }
                     catch (Exception delEx)
                     {
-                        PatchHelper.Log($"[Cloud] Pull: stale-cache delete failed for {path}: {delEx.Message}");
+                        PatchHelper.Log(
+                            $"[Cloud] Pull: stale-cache delete failed for {path}: {delEx.Message}"
+                        );
                     }
                 }
                 else
@@ -293,7 +316,9 @@ public static class CloudSyncCoordinator
             }
         }
 
-        PatchHelper.Log($"[Cloud] Pull complete: {downloaded} downloaded, {skipped} not in cloud, {deletedLocal} local files mirror-deleted");
+        PatchHelper.Log(
+            $"[Cloud] Pull complete: {downloaded} downloaded, {skipped} not in cloud, {deletedLocal} local files mirror-deleted"
+        );
     }
 
     public static List<string> GetSaveFilePaths(ISaveStore store)
@@ -403,7 +428,9 @@ public static class CloudSyncCoordinator
             }
             catch (Exception ex)
             {
-                PatchHelper.Log($"[Cloud] Mirror-delete: backup removal failed for {backupPath}: {ex.Message}");
+                PatchHelper.Log(
+                    $"[Cloud] Mirror-delete: backup removal failed for {backupPath}: {ex.Message}"
+                );
             }
         }
     }

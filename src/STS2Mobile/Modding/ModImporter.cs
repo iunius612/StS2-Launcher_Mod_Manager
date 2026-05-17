@@ -25,10 +25,7 @@ public static class ModImporter
 
     private static ImportResult ImportZip(string zipPath, bool overwrite)
     {
-        var tempRoot = Path.Combine(
-            OS.GetCacheDir(),
-            "mod_import_" + Guid.NewGuid().ToString("N")
-        );
+        var tempRoot = Path.Combine(OS.GetCacheDir(), "mod_import_" + Guid.NewGuid().ToString("N"));
         // Keep the cached zip around when the caller needs to retry with overwrite;
         // otherwise delete it so we don't leak zips in /cache.
         bool keepZip = false;

@@ -81,7 +81,8 @@ public class LauncherUI : Control
             // physical axis exceeds the project aspect, so don't compute scale
             // from it (would give different values on fold/unfold/rotate). Use
             // the base logical size — scale stays a stable 2.0.
-            var vpSize = GetViewport()?.GetVisibleRect().Size ?? new Vector2(LogicalWidth, LogicalHeight);
+            var vpSize =
+                GetViewport()?.GetVisibleRect().Size ?? new Vector2(LogicalWidth, LogicalHeight);
             SetAnchorsPreset(LayoutPreset.FullRect);
             // Required because LauncherUI's parent is the game's gameNode (a
             // plain Node, not a Control), so anchors don't drive auto-sizing —

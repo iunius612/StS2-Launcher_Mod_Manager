@@ -44,10 +44,7 @@ public class CloudWriteQueue : IDisposable
         );
         var deadline = Environment.TickCount64 + timeoutMs;
 
-        while (
-            (_queue.Count > 0 || _actionInProgress)
-            && Environment.TickCount64 < deadline
-        )
+        while ((_queue.Count > 0 || _actionInProgress) && Environment.TickCount64 < deadline)
             Thread.Sleep(100);
 
         if (_queue.Count > 0 || _actionInProgress)

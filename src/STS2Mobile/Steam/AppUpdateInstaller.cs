@@ -30,17 +30,27 @@ public static class AppUpdateInstaller
         CancellationToken ct
     )
     {
-        var cacheDir = GetCacheDir() ?? throw new InvalidOperationException("Cache dir unavailable");
+        var cacheDir =
+            GetCacheDir() ?? throw new InvalidOperationException("Cache dir unavailable");
         var dest = Path.Combine(cacheDir, ApkFileName);
         if (File.Exists(dest))
         {
-            try { File.Delete(dest); } catch { }
+            try
+            {
+                File.Delete(dest);
+            }
+            catch { }
         }
 
         using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromMinutes(10) };
         http.DefaultRequestHeaders.Add("User-Agent", "StS2-Launcher");
 
-        using var response = await http.GetAsync(url, System.Net.Http.HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+        using var response = await http.GetAsync(
+                url,
+                System.Net.Http.HttpCompletionOption.ResponseHeadersRead,
+                ct
+            )
+            .ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
 
         var totalBytes = response.Content.Headers.ContentLength ?? -1L;
@@ -48,11 +58,20 @@ public static class AppUpdateInstaller
         var lastReportedPct = -1f;
 
         using var src = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
-        using var dst = new FileStream(dest, FileMode.Create, System.IO.FileAccess.Write, FileShare.None, 8192, useAsync: true);
+        using var dst = new FileStream(
+            dest,
+            FileMode.Create,
+            System.IO.FileAccess.Write,
+            FileShare.None,
+            8192,
+            useAsync: true
+        );
 
         var buf = new byte[8192];
         int read;
-        while ((read = await src.ReadAsync(buf.AsMemory(0, buf.Length), ct).ConfigureAwait(false)) > 0)
+        while (
+            (read = await src.ReadAsync(buf.AsMemory(0, buf.Length), ct).ConfigureAwait(false)) > 0
+        )
         {
             await dst.WriteAsync(buf.AsMemory(0, read), ct).ConfigureAwait(false);
             downloaded += read;
@@ -113,7 +132,8 @@ public static class AppUpdateInstaller
         try
         {
             var jcw = Engine.GetSingleton("JavaClassWrapper");
-            var wrapper = (GodotObject)jcw.Call("wrap", "com.game.sts2launcher.modmanager.GodotApp");
+            var wrapper = (GodotObject)
+                jcw.Call("wrap", "com.game.sts2launcher.modmanager.GodotApp");
             return (GodotObject)wrapper.Call("getInstance");
         }
         catch

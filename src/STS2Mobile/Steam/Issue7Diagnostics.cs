@@ -327,7 +327,8 @@ public static class Issue7Diagnostics
                 }
             }
             else if (
-                root.TryGetProperty("acts", out var acts) && acts.ValueKind == JsonValueKind.Array
+                root.TryGetProperty("acts", out var acts)
+                && acts.ValueKind == JsonValueKind.Array
             )
             {
                 count = acts.GetArrayLength();

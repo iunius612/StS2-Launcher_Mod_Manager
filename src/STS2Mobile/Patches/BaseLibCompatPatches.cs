@@ -55,8 +55,10 @@ public static class BaseLibCompatPatches
 
     private static void OnAssemblyLoad(object sender, AssemblyLoadEventArgs args)
     {
-        if (_wired) return;
-        if (args.LoadedAssembly.GetName().Name != "BaseLib") return;
+        if (_wired)
+            return;
+        if (args.LoadedAssembly.GetName().Name != "BaseLib")
+            return;
 
         var asm = args.LoadedAssembly;
         TryPatchAsyncMethodCallCreate(asm);
@@ -74,7 +76,9 @@ public static class BaseLibCompatPatches
             var asyncMethodCallType = baseLibAsm.GetType("BaseLib.Utils.Patching.AsyncMethodCall");
             if (asyncMethodCallType == null)
             {
-                PatchHelper.Log("BaseLibCompat: AsyncMethodCall type not found in BaseLib assembly");
+                PatchHelper.Log(
+                    "BaseLibCompat: AsyncMethodCall type not found in BaseLib assembly"
+                );
                 return;
             }
             var createMethod = AccessTools.Method(asyncMethodCallType, "Create");
@@ -83,9 +87,14 @@ public static class BaseLibCompatPatches
                 PatchHelper.Log("BaseLibCompat: AsyncMethodCall.Create method not found");
                 return;
             }
-            var prefix = AccessTools.Method(typeof(BaseLibCompatPatches), nameof(AsyncMethodCallCreatePrefix));
+            var prefix = AccessTools.Method(
+                typeof(BaseLibCompatPatches),
+                nameof(AsyncMethodCallCreatePrefix)
+            );
             _harmony.Patch(createMethod, prefix: new HarmonyMethod(prefix));
-            PatchHelper.Log("Patched BaseLib.Utils.Patching.AsyncMethodCall.Create (state-machine hooks disabled for mobile compat)");
+            PatchHelper.Log(
+                "Patched BaseLib.Utils.Patching.AsyncMethodCall.Create (state-machine hooks disabled for mobile compat)"
+            );
         }
         catch (Exception ex)
         {
@@ -93,9 +102,14 @@ public static class BaseLibCompatPatches
         }
     }
 
-    public static bool AsyncMethodCallCreatePrefix(IEnumerable<CodeInstruction> code, ref List<CodeInstruction> __result)
+    public static bool AsyncMethodCallCreatePrefix(
+        IEnumerable<CodeInstruction> code,
+        ref List<CodeInstruction> __result
+    )
     {
-        Console.WriteLine("[BaseLibCompat] Skipping AsyncMethodCall.Create (mobile workaround) — async hook will not fire");
+        Console.WriteLine(
+            "[BaseLibCompat] Skipping AsyncMethodCall.Create (mobile workaround) — async hook will not fire"
+        );
         __result = code.ToList();
         return false;
     }
@@ -107,11 +121,17 @@ public static class BaseLibCompatPatches
         try
         {
             _skipPatchContainerType =
-                baseLibAsm.GetType("BaseLib.Patches.Rewards.CombatRoomFromSerializableRewardExtPatch")
-                ?? baseLibAsm.GetTypes().FirstOrDefault(t => t.Name == "CombatRoomFromSerializableRewardExtPatch");
+                baseLibAsm.GetType(
+                    "BaseLib.Patches.Rewards.CombatRoomFromSerializableRewardExtPatch"
+                )
+                ?? baseLibAsm
+                    .GetTypes()
+                    .FirstOrDefault(t => t.Name == "CombatRoomFromSerializableRewardExtPatch");
             if (_skipPatchContainerType == null)
             {
-                PatchHelper.Log("BaseLibCompat: CombatRoomFromSerializableRewardExtPatch type not found, skip-shim inactive");
+                PatchHelper.Log(
+                    "BaseLibCompat: CombatRoomFromSerializableRewardExtPatch type not found, skip-shim inactive"
+                );
                 return;
             }
 
@@ -127,9 +147,14 @@ public static class BaseLibCompatPatches
                 PatchHelper.Log("BaseLibCompat: PatchClassProcessor.Patch method not found");
                 return;
             }
-            var prefix = AccessTools.Method(typeof(BaseLibCompatPatches), nameof(PatchClassProcessorPatchPrefix));
+            var prefix = AccessTools.Method(
+                typeof(BaseLibCompatPatches),
+                nameof(PatchClassProcessorPatchPrefix)
+            );
             _harmony.Patch(patchMethod, prefix: new HarmonyMethod(prefix));
-            PatchHelper.Log($"Patched HarmonyLib.PatchClassProcessor.Patch (will skip {_skipPatchContainerType.FullName})");
+            PatchHelper.Log(
+                $"Patched HarmonyLib.PatchClassProcessor.Patch (will skip {_skipPatchContainerType.FullName})"
+            );
         }
         catch (Exception ex)
         {
@@ -137,15 +162,21 @@ public static class BaseLibCompatPatches
         }
     }
 
-    public static bool PatchClassProcessorPatchPrefix(object __instance, ref List<MethodInfo> __result)
+    public static bool PatchClassProcessorPatchPrefix(
+        object __instance,
+        ref List<MethodInfo> __result
+    )
     {
-        if (_skipPatchContainerType == null) return true;
+        if (_skipPatchContainerType == null)
+            return true;
         try
         {
             var f = AccessTools.Field(__instance.GetType(), "containerType");
             if (f?.GetValue(__instance) is Type ctype && ctype == _skipPatchContainerType)
             {
-                Console.WriteLine($"[BaseLibCompat] Skipping {ctype.FullName} (mobile workaround — init-setter modreq not importable by MonoMod on Android)");
+                Console.WriteLine(
+                    $"[BaseLibCompat] Skipping {ctype.FullName} (mobile workaround — init-setter modreq not importable by MonoMod on Android)"
+                );
                 __result = new List<MethodInfo>();
                 return false;
             }
@@ -175,7 +206,10 @@ public static class BaseLibCompatPatches
                 PatchHelper.Log("BaseLibCompat: ModelDb.Init method not found");
                 return;
             }
-            var prefix = AccessTools.Method(typeof(BaseLibCompatPatches), nameof(ModelDbInitCustomEnumFixupPrefix));
+            var prefix = AccessTools.Method(
+                typeof(BaseLibCompatPatches),
+                nameof(ModelDbInitCustomEnumFixupPrefix)
+            );
             var hm = new HarmonyMethod(prefix) { priority = Priority.First };
             _harmony.Patch(initMethod, prefix: hm);
             PatchHelper.Log("Patched ModelDb.Init with CustomEnum fixup prefix (Priority.First)");
@@ -194,12 +228,14 @@ public static class BaseLibCompatPatches
     // RegisterTargetTypes postfix crashes on duplicate-key Add.
     public static void ModelDbInitCustomEnumFixupPrefix()
     {
-        if (_customEnumFixupDone) return;
+        if (_customEnumFixupDone)
+            return;
         _customEnumFixupDone = true;
 
         try
         {
-            var baseLibAsm = AppDomain.CurrentDomain.GetAssemblies()
+            var baseLibAsm = AppDomain
+                .CurrentDomain.GetAssemblies()
                 .FirstOrDefault(a => a.GetName().Name == "BaseLib");
             if (baseLibAsm == null)
             {
@@ -207,20 +243,50 @@ public static class BaseLibCompatPatches
                 return;
             }
 
-            var customEnumAttr = baseLibAsm.GetType("BaseLib.CustomEnumAttribute");
-            var customEnums = baseLibAsm.GetType("BaseLib.CustomEnums");
-            var generateKey = customEnums?.GetMethod(
-                "GenerateKey",
-                BindingFlags.Public | BindingFlags.Static,
-                null,
-                new[] { typeof(FieldInfo) },
-                null
-            );
+            // Resolve BaseLib's CustomEnumAttribute / CustomEnums by short name —
+            // namespace varies across BaseLib versions (3.1.3 ships them under
+            // BaseLib.Patches.Content). GetType("BaseLib.CustomEnumAttribute") was
+            // null on 3.1.3 and produced "fixup skipped" -> still got Key:None.
+            Type customEnumAttr = null;
+            Type customEnums = null;
+            try
+            {
+                foreach (var t in baseLibAsm.GetTypes())
+                {
+                    if (customEnumAttr == null && t.Name == "CustomEnumAttribute")
+                        customEnumAttr = t;
+                    if (customEnums == null && t.Name == "CustomEnums")
+                        customEnums = t;
+                    if (customEnumAttr != null && customEnums != null)
+                        break;
+                }
+            }
+            catch (ReflectionTypeLoadException rtle)
+            {
+                foreach (var t in rtle.Types)
+                {
+                    if (t == null)
+                        continue;
+                    if (customEnumAttr == null && t.Name == "CustomEnumAttribute")
+                        customEnumAttr = t;
+                    if (customEnums == null && t.Name == "CustomEnums")
+                        customEnums = t;
+                }
+            }
+            var generateKey =
+                customEnums == null
+                    ? null
+                    : AccessTools.Method(customEnums, "GenerateKey", new[] { typeof(FieldInfo) });
             if (customEnumAttr == null || generateKey == null)
             {
-                PatchHelper.Log("BaseLibCompat: CustomEnumAttribute/GenerateKey not found, fixup skipped");
+                PatchHelper.Log(
+                    $"BaseLibCompat: CustomEnum fixup skipped — attr={customEnumAttr?.FullName ?? "null"} generateKey={(generateKey != null)}"
+                );
                 return;
             }
+            PatchHelper.Log(
+                $"BaseLibCompat: CustomEnum fixup resolved attr={customEnumAttr.FullName} generateKey={customEnums.FullName}.GenerateKey"
+            );
 
             int assigned = 0;
             int skippedAlreadySet = 0;
@@ -228,19 +294,35 @@ public static class BaseLibCompatPatches
             foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
             {
                 Type[] types;
-                try { types = asm.GetTypes(); }
-                catch { continue; }
+                try
+                {
+                    types = asm.GetTypes();
+                }
+                catch
+                {
+                    continue;
+                }
                 foreach (var type in types)
                 {
                     FieldInfo[] fields;
-                    try { fields = type.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static); }
-                    catch { continue; }
+                    try
+                    {
+                        fields = type.GetFields(
+                            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static
+                        );
+                    }
+                    catch
+                    {
+                        continue;
+                    }
                     foreach (var field in fields)
                     {
                         try
                         {
-                            if (!Attribute.IsDefined(field, customEnumAttr)) continue;
-                            if (!field.FieldType.IsEnum) continue;
+                            if (!Attribute.IsDefined(field, customEnumAttr))
+                                continue;
+                            if (!field.FieldType.IsEnum)
+                                continue;
 
                             var current = field.GetValue(null);
                             var defaultVal = Activator.CreateInstance(field.FieldType);
@@ -256,12 +338,16 @@ public static class BaseLibCompatPatches
                         catch (Exception inner)
                         {
                             failedPerField++;
-                            PatchHelper.Log($"BaseLibCompat: CustomEnum fixup failed for {type.FullName}.{field.Name}: {inner.Message}");
+                            PatchHelper.Log(
+                                $"BaseLibCompat: CustomEnum fixup failed for {type.FullName}.{field.Name}: {inner.Message}"
+                            );
                         }
                     }
                 }
             }
-            PatchHelper.Log($"BaseLibCompat: CustomEnum fixup -> assigned={assigned} alreadySet={skippedAlreadySet} failed={failedPerField}");
+            PatchHelper.Log(
+                $"BaseLibCompat: CustomEnum fixup -> assigned={assigned} alreadySet={skippedAlreadySet} failed={failedPerField}"
+            );
         }
         catch (Exception ex)
         {
