@@ -177,6 +177,8 @@ If no mods appear, check `adb logcat | grep "\[Mods\]"` — successful scans log
   Depot download directly from Steam, with update checking.
 - **Cloud saves**  
   Full Steam cloud sync via SteamKit2's CCloud API, with timestamp-aware conflict resolution and non-blocking background uploads.
+- **Local backup**  
+  Full-tree save snapshots to external storage, preserving the original folder layout and filenames (no `.bak` renaming). The **Local Backup** button takes a manual snapshot on demand (`Saves/manual/<ts>/`); the pre-PLAY cloud handshake auto-snapshots once per launch (`Saves/auto/<ts>_match/`, or `Saves/auto/<ts>_conflict/{kept,discarded}/` so a wrong KeepLocal/KeepCloud choice is recoverable). Manual sets are kept indefinitely; auto sets are FIFO-capped at the newest 10.
 - **Mobile adaptation**  
   Touch input, UI scaling, layout adjustments, and app lifecycle handling via Harmony runtime patches.
 - **LAN multiplayer**  

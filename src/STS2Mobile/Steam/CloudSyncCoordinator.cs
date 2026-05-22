@@ -8,13 +8,16 @@ using MegaCrit.Sts2.Core.Saves.Managers;
 
 namespace STS2Mobile.Steam;
 
-// Stateless cloud sync coordinator: auto sync, manual push/pull, and save backups.
+// Stateless cloud sync coordinator: auto sync and manual push/pull.
+//
+// Issue #36 Part A redesign: per-sync victim backups were REMOVED from this class.
+// Backups are now full-tree snapshots owned by LocalBackupService — taken once per
+// pre-PLAY handshake (auto) or on the user's action button (manual), not on every
+// push/pull/autosync. The old LocalBackupEnabled gate and Begin/EndBackupSession
+// machinery are gone with them.
 public static class CloudSyncCoordinator
 {
-    private const int MaxBackups = 50;
     private const int HistoryFileLimit = 100;
-
-    internal static bool LocalBackupEnabled;
 
     public static async Task PushFileAsync(ISaveStore local, ICloudSaveStore cloud, string path)
     {
@@ -31,7 +34,6 @@ public static class CloudSyncCoordinator
                 PatchHelper.Log($"[Cloud] Push: skipping {path} (identical)");
                 return;
             }
-            BackupProgressContent(path, cloudContent, "cloud");
         }
 
         cloud.WriteFile(path, content);
@@ -53,7 +55,6 @@ public static class CloudSyncCoordinator
                 PatchHelper.Log($"[Cloud] Pull: skipping {path} (identical)");
                 return;
             }
-            BackupProgressFile(local, path);
         }
 
         var pullTime = cloud.GetLastModifiedTime(path);
@@ -81,7 +82,6 @@ public static class CloudSyncCoordinator
                 {
                     PatchHelper.Log($"[Cloud] Sync: local {path} is corrupt, pulling from cloud");
                     Issue7Diagnostics.LogIsCorruptDetected(path, localContent);
-                    BackupProgressFile(local, path);
                     var cloudTime = cloud.GetLastModifiedTime(path);
                     await local.WriteFileAsync(path, cloudContent);
                     local.SetLastModifiedTime(path, cloudTime);
@@ -105,7 +105,6 @@ public static class CloudSyncCoordinator
                         cloudContent,
                         "CloudWins"
                     );
-                    BackupProgressFile(local, path);
                     var cloudTime = cloud.GetLastModifiedTime(path);
                     await local.WriteFileAsync(path, cloudContent);
                     local.SetLastModifiedTime(path, cloudTime);
@@ -119,7 +118,6 @@ public static class CloudSyncCoordinator
                         cloudContent,
                         "LocalWins"
                     );
-                    BackupProgressContent(path, cloudContent, "cloud");
                     cloud.WriteFile(path, localContent);
                 }
                 else
@@ -132,7 +130,6 @@ public static class CloudSyncCoordinator
                         cloudContent,
                         "EqualOrNonProgress→CloudWins"
                     );
-                    BackupProgressFile(local, path);
                     var cloudTime = cloud.GetLastModifiedTime(path);
                     await local.WriteFileAsync(path, cloudContent);
                     local.SetLastModifiedTime(path, cloudTime);
@@ -156,7 +153,9 @@ public static class CloudSyncCoordinator
         }
     }
 
-    public static async Task ManualPushAllAsync(string accountName, string refreshToken)
+    // Returns Task (not async): the per-sync cloud backup loop that needed an await
+    // was removed in the Part A redesign, so the body is now fully synchronous.
+    public static Task ManualPushAllAsync(string accountName, string refreshToken)
     {
         var localStore = new GodotFileIo(UserDataPathProvider.GetAccountScopedBasePath(null));
         var cloudStore =
@@ -165,27 +164,6 @@ public static class CloudSyncCoordinator
 
         var paths = GetSaveFilePaths(localStore);
         PatchHelper.Log($"[Cloud] Push: starting ({paths.Count} files)");
-
-        int backedUp = 0;
-        foreach (var path in paths)
-        {
-            try
-            {
-                if (!IsImportantSave(path) || !cloudStore.FileExists(path))
-                    continue;
-
-                PatchHelper.Log($"[Cloud] Push: backing up cloud {path}");
-                var content = await cloudStore.ReadFileAsync(path);
-                BackupSaveContent(path, content, "cloud-pre-push");
-                backedUp++;
-            }
-            catch (Exception ex)
-            {
-                PatchHelper.Log($"[Cloud] Push: backup failed for cloud {path}: {ex.Message}");
-            }
-        }
-        if (backedUp > 0)
-            PatchHelper.Log($"[Cloud] Push: backed up {backedUp} cloud files");
 
         cloudStore.BeginSaveBatch();
         int count = 0;
@@ -220,6 +198,7 @@ public static class CloudSyncCoordinator
         PatchHelper.Log(
             $"[Cloud] Push complete: {count} files batched for upload, {deletedCloud} cloud files mirror-deleted"
         );
+        return Task.CompletedTask;
     }
 
     public static async Task ManualPullAllAsync(string accountName, string refreshToken)
@@ -231,25 +210,6 @@ public static class CloudSyncCoordinator
 
         var paths = GetSaveFilePaths(cloudStore);
         PatchHelper.Log($"[Cloud] Pull: starting ({paths.Count} files)");
-
-        int backedUp = 0;
-        foreach (var path in paths)
-        {
-            try
-            {
-                if (!localStore.FileExists(path))
-                    continue;
-
-                BackupSaveContent(path, localStore.ReadFile(path), "local-pre-pull");
-                backedUp++;
-            }
-            catch (Exception ex)
-            {
-                PatchHelper.Log($"[Cloud] Pull: backup failed for local {path}: {ex.Message}");
-            }
-        }
-        if (backedUp > 0)
-            PatchHelper.Log($"[Cloud] Pull: backed up {backedUp} local files");
 
         int downloaded = 0;
         int skipped = 0;
@@ -392,15 +352,6 @@ public static class CloudSyncCoordinator
         return content[0] != '{' && content[0] != '[';
     }
 
-    // History files are immutable past runs and don't need backup.
-    private static bool IsImportantSave(string path)
-    {
-        var lower = path.Replace("user://", "").ToLowerInvariant();
-        return lower.Contains("progress.save")
-            || lower.Contains("current_run")
-            || lower.Contains("prefs");
-    }
-
     // Issue #31: ephemeral per-run save files. The game deletes these from cloud
     // when a run ends (clear/abandon) — manual Pull/Push must mirror that deletion
     // to the other side so completed runs don't reappear as "Continue" zombies.
@@ -435,106 +386,4 @@ public static class CloudSyncCoordinator
         }
     }
 
-    public static void BackupSaveContent(string path, string content, string source)
-    {
-        try
-        {
-            if (string.IsNullOrEmpty(content))
-                return;
-
-            if (!LocalBackupEnabled || !AppPaths.HasStoragePermission())
-                return;
-
-            var canonPath = path.Replace("user://", "").Replace("\\", "/");
-            var parts = canonPath.Split('/');
-
-            var profileDir = "default";
-            for (int i = 0; i < parts.Length; i++)
-            {
-                if (parts[i].StartsWith("profile"))
-                {
-                    profileDir = parts[i];
-                    break;
-                }
-            }
-
-            var fileName = Path.GetFileName(canonPath);
-            var backupDir = Path.Combine(AppPaths.ExternalSaveBackupsDir, profileDir);
-            Directory.CreateDirectory(backupDir);
-
-            var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-            var backupPath = Path.Combine(backupDir, $"{fileName}.{timestamp}.{source}.bak");
-
-            File.WriteAllText(backupPath, content);
-            PatchHelper.Log($"[Cloud] Backed up {source} {path}");
-        }
-        catch (Exception ex)
-        {
-            PatchHelper.Log($"[Cloud] Backup failed for {source} {path}: {ex.Message}");
-        }
-    }
-
-    public static void BackupProgressFile(ISaveStore local, string path)
-    {
-        var canonPath = path.Replace("user://", "").Replace("\\", "/").ToLowerInvariant();
-        if (!canonPath.Contains("progress") || !canonPath.EndsWith(".save"))
-            return;
-
-        if (!local.FileExists(path))
-            return;
-
-        BackupProgressContent(path, local.ReadFile(path), "local");
-    }
-
-    public static void BackupProgressContent(string path, string content, string source)
-    {
-        try
-        {
-            var canonPath = path.Replace("user://", "").Replace("\\", "/").ToLowerInvariant();
-            if (!canonPath.Contains("progress") || !canonPath.EndsWith(".save"))
-                return;
-
-            if (!LocalBackupEnabled || !AppPaths.HasStoragePermission())
-                return;
-
-            var parts = canonPath.Split('/');
-            var profileDir = "default";
-            for (int i = 0; i < parts.Length; i++)
-            {
-                if (parts[i].StartsWith("profile"))
-                {
-                    profileDir = parts[i];
-                    break;
-                }
-            }
-
-            var backupDir = Path.Combine(AppPaths.ExternalSaveBackupsDir, profileDir);
-            Directory.CreateDirectory(backupDir);
-
-            var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-            var backupPath = Path.Combine(backupDir, $"progress.save.{timestamp}.{source}.bak");
-
-            File.WriteAllText(backupPath, content);
-            PatchHelper.Log($"[Cloud] Backed up {source} {path} → {backupPath}");
-
-            var backups = Directory
-                .GetFiles(backupDir, "progress.save.*.bak")
-                .OrderByDescending(f => f)
-                .Skip(MaxBackups)
-                .ToArray();
-
-            foreach (var old in backups)
-            {
-                try
-                {
-                    File.Delete(old);
-                }
-                catch { }
-            }
-        }
-        catch (Exception ex)
-        {
-            PatchHelper.Log($"[Cloud] Backup failed for {source} {path}: {ex.Message}");
-        }
-    }
 }

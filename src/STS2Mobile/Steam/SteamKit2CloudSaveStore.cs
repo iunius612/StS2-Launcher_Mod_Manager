@@ -120,6 +120,18 @@ public class SteamKit2CloudSaveStore : ICloudSaveStore, ISaveStore, IDisposable
     {
         var canonPath = CloudFileCache.CanonicalizePath(path);
 
+        // Issue #36 Part B — prevention guard at the single cloud write funnel.
+        // MUST run BEFORE _cache.Set: the guard compares the new length against the
+        // cloud's CURRENT cached size, and _cache.Set below overwrites that size
+        // with the new (possibly empty) length. Blocking here early-returns before
+        // both the cache update and the upload enqueue, so a destructive empty
+        // write touches neither the cache nor Steam — the good cloud copy survives.
+        if (CloudWriteGuard.ShouldBlockWrite(_cache, canonPath, bytes.Length, out var blockReason))
+        {
+            CloudWriteGuard.NotifyBlocked(canonPath, blockReason);
+            return;
+        }
+
         var truncatedNow = DateTimeOffset.FromUnixTimeSeconds(
             DateTimeOffset.UtcNow.ToUnixTimeSeconds()
         );

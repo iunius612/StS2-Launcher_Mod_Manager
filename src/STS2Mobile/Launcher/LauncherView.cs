@@ -266,6 +266,26 @@ public class LauncherView
         return dialog;
     }
 
+    // Issue #36 Part A: outcome modal for a manual Local Backup run.
+    public void ShowBackupResult(
+        bool success,
+        int fileCount,
+        long totalBytes,
+        string backupPath,
+        string failureReason
+    )
+    {
+        var dialog = new BackupResultDialog(
+            success,
+            fileCount,
+            totalBytes,
+            backupPath,
+            failureReason,
+            _scale
+        );
+        _parent.AddChild(dialog);
+    }
+
     public void ShowBranchPicker(
         IReadOnlyList<SteamBranchInfo> branches,
         string currentBranch,

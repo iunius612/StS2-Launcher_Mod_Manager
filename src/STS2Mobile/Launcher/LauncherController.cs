@@ -118,7 +118,7 @@ public class LauncherController
         _view.Download.DownloadRequested += OnDownloadPressed;
         _view.Actions.LaunchPressed += OnLaunchPressed;
         _view.Actions.RetryPressed += OnRetryPressed;
-        _view.Actions.LocalBackupToggled += OnLocalBackupToggled;
+        _view.Actions.LocalBackupPressed += OnLocalBackupPressed;
         _view.Actions.CloudSyncToggled += OnCloudSyncToggled;
         _view.Actions.CloudPushPressed += OnCloudPushPressed;
         _view.Actions.CloudPullPressed += OnCloudPullPressed;
@@ -129,9 +129,9 @@ public class LauncherController
         _view.DebugButton.Pressed += OnDebugTogglePressed;
         UpdateDebugButtonLabel();
 
-        var localBackupPref = LauncherModel.LoadLocalBackupPref();
-        _view.Actions.SetLocalBackupChecked(localBackupPref);
-        CloudSyncCoordinator.LocalBackupEnabled = localBackupPref;
+        // Issue #36 Part A: Local Backup is no longer a persisted toggle —
+        // there's nothing to restore on boot. It's a one-shot action button
+        // (OnLocalBackupPressed) that snapshots the save tree on demand.
         // Always ensure the external StS2LauncherMM/{Mods,Saves} tree exists when
         // the user has granted storage permission — the Mods directory in
         // particular is needed for ModLoaderPatches to find user-installed mods,
@@ -806,16 +806,74 @@ public class LauncherController
     private void UpdateDebugButtonLabel() =>
         _view.DebugButton.Text = DebugLogger.IsEnabled() ? "Debug: ON" : "Debug: OFF";
 
-    private void OnLocalBackupToggled(bool pressed)
+    // Issue #36 Part A: one-shot manual backup. Confirm → background snapshot
+    // of the whole save tree via LocalBackupService.BackupNow() → result modal.
+    private void OnLocalBackupPressed()
     {
-        if (pressed && !AppPaths.HasStoragePermission())
+        // Backups live under external storage (StS2LauncherMM/Saves). Without
+        // the permission there's nowhere to write — request it and bail so the
+        // user can grant and retry, rather than firing a guaranteed failure.
+        // (BackupNow also re-checks and returns NeedsPermission, but pre-checking
+        // lets us prompt up front instead of showing a failure dialog.)
+        if (!AppPaths.HasStoragePermission())
+        {
             AppPaths.RequestStoragePermission();
+            _view.ShowConfirmation(
+                "백업하려면 저장공간 접근 권한이 필요합니다.\n권한을 허용한 뒤 다시 시도하세요.",
+                onConfirmed: null,
+                okLabel: "확인",
+                cancelLabel: "닫기"
+            );
+            return;
+        }
 
-        if (pressed)
-            AppPaths.EnsureExternalDirectories();
+        ShowConfirmation(
+            "현재 세이브 데이터를 로컬에 백업할까요?",
+            () =>
+            {
+                AppPaths.EnsureExternalDirectories();
+                _view.Actions.SetSyncBusy(true);
+                _view.AppendLog("Backing up saves locally...");
+                // BackupNow() is synchronous and does file I/O — run it off the
+                // main thread, then marshal the result back for UI.
+                Task.Run(() =>
+                {
+                    var result = LocalBackupService.BackupNow();
+                    _runOnMainThread(() =>
+                    {
+                        _view.Actions.SetSyncBusy(false);
 
-        LauncherModel.SaveLocalBackupPref(pressed);
-        CloudSyncCoordinator.LocalBackupEnabled = pressed;
+                        // Permission can be revoked between the pre-check above
+                        // and the call; surface that path explicitly.
+                        if (!result.Success && result.NeedsPermission)
+                        {
+                            AppPaths.RequestStoragePermission();
+                            _view.AppendLog("Local backup needs storage permission.");
+                            _view.ShowConfirmation(
+                                "백업하려면 저장공간 접근 권한이 필요합니다.\n권한을 허용한 뒤 다시 시도하세요.",
+                                onConfirmed: null,
+                                okLabel: "확인",
+                                cancelLabel: "닫기"
+                            );
+                            return;
+                        }
+
+                        _view.AppendLog(
+                            result.Success
+                                ? $"Local backup complete: {result.FileCount} file(s)."
+                                : $"Local backup failed: {result.Error}"
+                        );
+                        _view.ShowBackupResult(
+                            result.Success,
+                            result.FileCount,
+                            result.TotalBytes,
+                            result.DestPath,
+                            result.Error
+                        );
+                    });
+                });
+            }
+        );
     }
 
     private void OnCloudSyncToggled(bool pressed)

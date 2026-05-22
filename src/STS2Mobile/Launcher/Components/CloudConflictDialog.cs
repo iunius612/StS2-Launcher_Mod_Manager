@@ -95,7 +95,12 @@ public class CloudConflictDialog : ColorRect
         float scale,
         SyncDecision decision = SyncDecision.Conflict,
         float viewportHeight = 1080f,
-        int diffSlotCount = 0
+        int diffSlotCount = 0,
+        // Issue #36 Part B: when set, replaces the auto-generated subtitle. Used
+        // by CloudWriteGuard to surface why a destructive cloud write was blocked
+        // (informational, close-only — pass with SyncDecision.Identical).
+        string customSubtitle = null,
+        string customTitle = null
     )
     {
         local ??= new SaveProgressSummary();
@@ -151,6 +156,11 @@ public class CloudConflictDialog : ColorRect
                     : "이 디바이스와 Steam Cloud의 진행도가 다릅니다.\n어느 쪽을 유지할지 선택하세요."
             ),
         };
+        if (!string.IsNullOrEmpty(customTitle))
+            titleText = customTitle;
+        if (!string.IsNullOrEmpty(customSubtitle))
+            subtitleText = customSubtitle;
+
         var title = new StyledLabel(titleText, scale, fontSize: sz.TitleFs);
         vbox.AddChild(title);
 

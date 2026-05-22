@@ -17,9 +17,35 @@ public static class AppPaths
     public const string ExternalSaveBackupsDir = ExternalRoot + "/Saves";
     public const string ExternalLogsDir = ExternalRoot + "/Logs";
 
+    // Issue #36 Part A redesign: backups are segregated by origin under Saves/.
+    //   manual/ — user-triggered snapshots (LocalBackupService.BackupNow). Never
+    //             auto-evicted (FIFO-protected) so an intentional backup is durable.
+    //   auto/   — pre-PLAY handshake snapshots. FIFO-capped (newest N sets kept).
+    public const string ExternalManualBackupsDir = ExternalSaveBackupsDir + "/manual";
+    public const string ExternalAutoBackupsDir = ExternalSaveBackupsDir + "/auto";
+
     // User-editable configs that need to be reachable without root/ADB (issue #26).
     public const string ExternalConfigDir = ExternalRoot + "/Config";
     public const string ExternalModConfigFile = ExternalModsDir + "/mod_config.json";
+
+    // Issue #36 Part A: builds the on-disk backup path that mirrors a save's
+    // original folder structure and filename under a backup-set directory. The
+    // filename is never altered, so a restore is a plain copy of the original file
+    // back to user://. Example:
+    //   savePath  = "user://steam/7656.../profile1/saves/progress.save"
+    //   setDir    = "<ExternalAutoBackupsDir>/20260522_153000_match"
+    //   => <setDir>/steam/7656.../profile1/saves/progress.save
+    public static string BuildBackupPath(string setDir, string savePath)
+    {
+        var relative = savePath.Replace("user://", "").Replace("\\", "/").TrimStart('/');
+        var combined = setDir;
+        foreach (var segment in relative.Split('/'))
+        {
+            if (segment.Length > 0)
+                combined = Path.Combine(combined, segment);
+        }
+        return combined;
+    }
 
     // Returns true if the app has permission to write to shared external storage.
     public static bool HasStoragePermission()

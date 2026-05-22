@@ -327,7 +327,10 @@ public static class LauncherPatches
         {
             case SyncDecision.NoData:
             case SyncDecision.Identical:
-                // Truly nothing to surface — both sides agree (or neither has anything).
+                // Sides agree (or neither has anything). Issue #36 Part A: take the
+                // one-per-handshake auto MATCH snapshot of the local tree. No dialog,
+                // nothing overwritten — fire-and-forget on a background thread.
+                LocalBackupService.BackupHandshakeMatch(localStore);
                 return;
 
             case SyncDecision.MobileOnly:
@@ -369,10 +372,27 @@ public static class LauncherPatches
         var choice = await dialog.Result;
         PatchHelper.Log($"[Cloud] Conflict resolved by user: choice={choice}");
 
+        // Issue #36 Part A: one-per-handshake auto CONFLICT snapshot, in two phases
+        // around the resolution. Phase 1 (discarded = the old state about to be
+        // thrown away) is AWAITED before ApplyChosenSideAsync so it's on disk before
+        // being overwritten. Phase 2 (kept = the resolved LOCAL tree) fires after
+        // apply. Both land in one auto/<ts>_conflict folder via the handle. Cancel
+        // overwrites nothing → no snapshot.
+        LocalBackupService.ConflictBackupHandle conflictBackup = null;
+        if (choice == CloudConflictChoice.KeepLocal || choice == CloudConflictChoice.KeepCloud)
+        {
+            conflictBackup = await LocalBackupService.BackupConflictDiscardedAsync(
+                localStore,
+                cloudStore,
+                keepLocal: choice == CloudConflictChoice.KeepLocal
+            );
+        }
+
         switch (choice)
         {
             case CloudConflictChoice.KeepLocal:
                 await ApplyChosenSideAsync(localStore, cloudStore, keepLocal: true);
+                LocalBackupService.BackupConflictKept(conflictBackup, localStore);
                 if (!await FlushAndVerifyAsync(localStore, cloudStore, keepLocal: true))
                 {
                     PatchHelper.Log(
@@ -383,6 +403,7 @@ public static class LauncherPatches
                 break;
             case CloudConflictChoice.KeepCloud:
                 await ApplyChosenSideAsync(localStore, cloudStore, keepLocal: false);
+                LocalBackupService.BackupConflictKept(conflictBackup, localStore);
                 if (!await FlushAndVerifyAsync(localStore, cloudStore, keepLocal: false))
                 {
                     PatchHelper.Log(

@@ -8,7 +8,9 @@ public class ActionSection : VBoxContainer
 {
     public event Action LaunchPressed;
     public event Action RetryPressed;
-    public event Action<bool> LocalBackupToggled;
+    // Issue #36 Part A: Local Backup is now a one-shot action, not a persisted
+    // on/off mode. Pressing it triggers a manual full-tree snapshot.
+    public event Action LocalBackupPressed;
     public event Action<bool> CloudSyncToggled;
     public event Action CloudPushPressed;
     public event Action CloudPullPressed;
@@ -17,7 +19,7 @@ public class ActionSection : VBoxContainer
 
     private readonly Button _launchButton;
     private readonly Button _retryButton;
-    private readonly StyledButton _localBackupToggle;
+    private readonly StyledButton _localBackupButton;
     private readonly StyledButton _cloudSyncToggle;
     private readonly Button _pushButton;
     private readonly Button _pullButton;
@@ -38,17 +40,10 @@ public class ActionSection : VBoxContainer
         _offStyle = StyledButton.MakeOutline(new Color(0.7f, 0.25f, 0.25f), r, bw);
         _onStyle = StyledButton.MakeOutline(new Color(0.25f, 0.65f, 0.3f), r, bw);
 
-        _localBackupToggle = new StyledButton("Local Backup: OFF", scale, fontSize: 14, height: 44);
-        _localBackupToggle.ToggleMode = true;
-        _localBackupToggle.Visible = false;
-        ApplyToggleStyle(_localBackupToggle, false);
-        _localBackupToggle.Toggled += pressed =>
-        {
-            _localBackupToggle.Text = pressed ? "Local Backup: ON" : "Local Backup: OFF";
-            ApplyToggleStyle(_localBackupToggle, pressed);
-            LocalBackupToggled?.Invoke(pressed);
-        };
-        AddChild(_localBackupToggle);
+        _localBackupButton = new StyledButton("Local Backup", scale, fontSize: 14, height: 44);
+        _localBackupButton.Visible = false;
+        _localBackupButton.Pressed += () => LocalBackupPressed?.Invoke();
+        AddChild(_localBackupButton);
 
         _cloudSyncToggle = new StyledButton("Auto Sync: OFF", scale, fontSize: 14, height: 44);
         _cloudSyncToggle.ToggleMode = true;
@@ -99,13 +94,6 @@ public class ActionSection : VBoxContainer
         AddChild(_launchButton);
     }
 
-    public void SetLocalBackupChecked(bool value)
-    {
-        _localBackupToggle.ButtonPressed = value;
-        _localBackupToggle.Text = value ? "Local Backup: ON" : "Local Backup: OFF";
-        ApplyToggleStyle(_localBackupToggle, value);
-    }
-
     public void SetCloudSyncChecked(bool value)
     {
         _cloudSyncToggle.ButtonPressed = value;
@@ -128,7 +116,7 @@ public class ActionSection : VBoxContainer
     {
         _launchButton.Text = text;
         _launchButton.Visible = true;
-        _localBackupToggle.Visible = showCloudSync;
+        _localBackupButton.Visible = showCloudSync;
         _cloudSyncToggle.Visible = showCloudSync;
         PushPullRow.Visible = showCloudSync;
         _gameUpdateButton.Visible = showUpdate;
@@ -144,7 +132,7 @@ public class ActionSection : VBoxContainer
     {
         _retryButton.Visible = true;
         _launchButton.Visible = false;
-        _localBackupToggle.Visible = false;
+        _localBackupButton.Visible = false;
         _cloudSyncToggle.Visible = false;
         PushPullRow.Visible = false;
         _gameUpdateButton.Visible = false;
@@ -155,7 +143,7 @@ public class ActionSection : VBoxContainer
     {
         _launchButton.Visible = false;
         _retryButton.Visible = false;
-        _localBackupToggle.Visible = false;
+        _localBackupButton.Visible = false;
         _cloudSyncToggle.Visible = false;
         PushPullRow.Visible = false;
         _gameUpdateButton.Visible = false;
@@ -173,6 +161,9 @@ public class ActionSection : VBoxContainer
         _pushButton.Disabled = busy;
         _pullButton.Disabled = busy;
         _launchButton.Disabled = busy;
+        // A manual backup snapshots the same save tree the sync touches, so
+        // keep it locked while a cloud op (or another backup) is in flight.
+        _localBackupButton.Disabled = busy;
     }
 
     public void SetGameUpdateButtonText(string text) => _gameUpdateButton.Text = text;
