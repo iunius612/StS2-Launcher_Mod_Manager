@@ -23,6 +23,10 @@ public class LauncherController
     private string _lastLaunchText = "LAUNCH";
     private bool _lastShowCloudSync;
     private bool _lastShowUpdate;
+    // Issue #45: OnCheckGameUpdatePressed 의 picked != current 분기 통과 시 true
+    // 로 마킹, DownloadCompleted 콜백에서 소비. true 였다면 NeedsRestartAfterBranchSwitch
+    // set → Play 버튼이 "앱 재시작 필요" 로 분기됨.
+    private bool _pendingBranchSwitch;
 
     public LauncherController(
         LauncherModel model,
@@ -65,9 +69,17 @@ public class LauncherController
             {
                 _view.SetStatus("Download complete! Restart to play.");
                 _view.Download.Visible = false;
+                // Issue #45: 브랜치 전환 직후 다운로드 완료라면 dst dll 과 mismatch
+                // 위험 — Play 가 아니라 명시적 재시작이 유일한 안전 경로.
+                if (_pendingBranchSwitch)
+                {
+                    _pendingBranchSwitch = false;
+                    _model.NeedsRestartAfterBranchSwitch = true;
+                    PatchHelper.Log("[Launcher] Branch-switch download complete — flagging restart");
+                }
                 if (LauncherModel.GameFilesReady())
                 {
-                    var text = _model.InGameMode ? "PLAY" : "RESTART APP";
+                    var text = ResolveLaunchButtonText();
                     ShowLaunchStage(text, showCloudSync: false, showUpdate: false);
                 }
                 else
@@ -170,7 +182,7 @@ public class LauncherController
         {
             case FastPathResult.ReadyToLaunch:
                 _view.SetStatus($"Welcome back, {_model.AccountName}");
-                var text = _model.InGameMode ? "PLAY" : "RESTART APP";
+                var text = ResolveLaunchButtonText();
                 ShowLaunchStage(text, showCloudSync: true, showUpdate: true);
                 break;
 
@@ -322,7 +334,7 @@ public class LauncherController
                 {
                     _view.SetStatus("No connection — saved credentials will be used");
                     _view.AppendLog("Connection timed out. Valid ownership marker found.");
-                    var text = _model.InGameMode ? "PLAY" : "RESTART APP";
+                    var text = ResolveLaunchButtonText();
                     ShowLaunchStage(text, showCloudSync: true, showUpdate: false);
                 });
             }
@@ -385,7 +397,7 @@ public class LauncherController
                 _view.SetStatus($"Logged in as {_model.AccountName}");
                 if (LauncherModel.GameFilesReady())
                 {
-                    var text = _model.InGameMode ? "PLAY" : "RESTART APP";
+                    var text = ResolveLaunchButtonText();
                     ShowLaunchStage(text, showCloudSync: true, showUpdate: true);
                 }
                 else
@@ -512,6 +524,10 @@ public class LauncherController
                 return;
             }
             _model.WipeGameFiles();
+            // Issue #45: 사용자가 곧 이어 DOWNLOAD 버튼을 누를 것이고, 다운 완료 시
+            // PCK 가 in-process 갱신되어 dst dll 과 mismatch. 다운로드 완료 callback
+            // 이 이 플래그를 보고 NeedsRestartAfterBranchSwitch 를 set 한다.
+            _pendingBranchSwitch = true;
             _runOnMainThread(() =>
             {
                 _view.Actions.HideAll();
@@ -941,5 +957,27 @@ public class LauncherController
         HandleFastPath(result);
     }
 
-    private void OnLaunchPressed() => _model.Launch();
+    private void OnLaunchPressed()
+    {
+        // Issue #45: 브랜치 전환으로 PCK in-process 갱신이 있었다면 dst dll 과
+        // mismatch 위험 — Launch 대신 process 종료 (clean exit, recents 에서 사라짐).
+        // 사용자가 launcher 아이콘 재탭 시 GodotApp.setupAssemblies() 새 dll 복사.
+        if (_model.NeedsRestartAfterBranchSwitch)
+        {
+            PatchHelper.Log("[Launcher] Restart-required button tapped — exiting app");
+            LauncherModel.GetGodotApp()?.Call("exitApp");
+            return;
+        }
+        _model.Launch();
+    }
+
+    // Issue #45: Play 버튼 라벨은 NeedsRestartAfterBranchSwitch 가 set 이면 한국어
+    // "앱 재시작 필요" 로 강제, 그 외에는 기존 InGameMode 로직 유지.
+    private string ResolveLaunchButtonText()
+    {
+        if (_model.NeedsRestartAfterBranchSwitch)
+            return "앱 재시작 필요";
+        return _model.InGameMode ? "PLAY" : "RESTART APP";
+    }
+
 }

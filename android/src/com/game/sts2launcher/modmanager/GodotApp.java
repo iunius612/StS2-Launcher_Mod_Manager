@@ -560,18 +560,18 @@ public class GodotApp extends GodotActivity {
 
 		boolean versionChanged = isNewVersion();
 
-		File patcherMarker = new File(destDir, "STS2Mobile.dll");
-		File sts2Marker = new File(destDir, "sts2.dll");
-		if (sts2Marker.exists() && patcherMarker.exists() && !versionChanged) {
-			Log.i(TAG, "Assemblies already set up at: " + destDir.getAbsolutePath());
-			return;
-		}
+		// Issue #44 v2: 옛 early-return ("sts2Marker.exists() && !versionChanged → return") 은
+		// issue #5 의 file-by-file size+mtime 비교(아래 루프)를 dead-code 화시켰다. launcher APK
+		// versionCode 가 안 바뀌면 게임 PCK 가 새 버전으로 업데이트돼도 dst 의 dll 이 영원히
+		// stale 로 남았음 (예: v0.107.0 PCK + v0.106 dll 캐시 → issue #42/#43 의 마스킹 원인).
+		// 매 부팅마다 BCL 재복사(stream copy, ~10MB) + 게임 측 dll size+mtime 비교 후 변경된
+		// 것만 복사. BCL 은 bclNames 가드(line ~640) 로 보호되어 게임 측 desktop CoreCLR BCL 이
+		// 덮어쓰지 않도록 안전.
+		destDir.mkdirs();
 
 		if (versionChanged) {
 			Log.i(TAG, "New version detected, re-copying all assemblies");
 		}
-
-		destDir.mkdirs();
 
 		java.util.Set<String> bclNames = new java.util.HashSet<>();
 		try {
@@ -821,6 +821,17 @@ public class GodotApp extends GodotActivity {
 			startActivity(intent);
 		}
 		Runtime.getRuntime().exit(0);
+	}
+
+	// Issue #45: 브랜치 전환 후 PCK/dll mismatch 회피를 위한 명시적 process exit.
+	// 사용자가 launcher 아이콘 재탭 시 onCreate → setupAssemblies 가 새 dll 로 dst 갱신
+	// (issue #44 의 (2) per-file 비교) → 정상 부팅.
+	public void exitApp() {
+		Log.i(TAG, "[exitApp] User-initiated restart — finishing affinity and exiting process");
+		runOnUiThread(() -> {
+			finishAffinity();
+			Runtime.getRuntime().exit(0);
+		});
 	}
 
 	// AES-256-GCM encryption via Android Keystore (hardware-backed TEE).

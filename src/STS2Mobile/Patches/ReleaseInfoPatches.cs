@@ -88,6 +88,7 @@ public static class ReleaseInfoPatches
             var branch = (string)node["branch"] ?? string.Empty;
             var dateStr = (string)node["date"];
             DateTime date = DateTime.TryParse(dateStr, out var parsed) ? parsed : DateTime.UtcNow;
+            var assemblyHash = (int?)node["main_assembly_hash"] ?? 0;
 
             __result = new ReleaseInfo
             {
@@ -95,6 +96,7 @@ public static class ReleaseInfoPatches
                 Version = version,
                 Date = date,
                 Branch = branch,
+                MainAssemblyHash = assemblyHash,
             };
 
             PatchHelper.Log(

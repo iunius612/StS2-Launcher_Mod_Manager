@@ -32,6 +32,10 @@ public class LauncherModel : IDisposable
     public volatile bool ConnectionResolved;
     public volatile bool AwaitingCode;
 
+    // Issue #45: 브랜치 전환으로 PCK 가 in-process 갱신되면 dst dll 과 mismatch
+    // — process restart 필요. LauncherUI 가 이걸 보고 Play→Restart 분기.
+    internal volatile bool NeedsRestartAfterBranchSwitch;
+
     // True when launched from GameStartupWrapper (game files present). False in
     // standalone launcher mode where a restart is needed after downloading files.
     // Setting this to true eagerly creates the launch TCS so it exists before the
