@@ -1,17 +1,20 @@
-using System;
-using System.Collections.Generic;
-using System.Reflection.Emit;
 using HarmonyLib;
 using MegaCrit.Sts2.Core.Modding;
 
 namespace STS2Mobile.Patches;
 
 // Redirects the game's built-in mod loader to scan AppPaths.ExternalModsDir
-// (/storage/emulated/0/StS2Launcher/Mods) instead of the "mods" folder next to
-// the game executable. A Harmony transpiler rewrites the relevant IL inside
-// ModManager.Initialize so the game's own recursive scanner walks our path;
-// the Steam-only enumerator is short-circuited because Android has no
-// Steamworks runtime.
+// (/storage/emulated/0/StS2LauncherMM/Mods) instead of the "mods" folder next
+// to the game executable. As of sts2 v0.107.0 ModManager.Initialize is async
+// (Task), so the compiler hoists the body — including Path.Combine(..., "mods")
+// — into a generated MoveNext state machine and the old ldstr "mods"
+// transpiler against the main body no longer matches.
+//
+// New approach (issue #45): prefix-swap the IModManagerFileIo argument with a
+// wrapper that transparently redirects any path under "mods" to our external
+// directory. The game's own scanner then walks the right folder without us
+// touching its IL. The Steam-only enumerator is still short-circuited because
+// Android has no Steamworks runtime.
 public static class ModLoaderPatches
 {
     public static void Apply(Harmony harmony)
@@ -20,7 +23,7 @@ public static class ModLoaderPatches
             harmony,
             typeof(ModManager),
             "Initialize",
-            transpiler: PatchHelper.Method(typeof(ModLoaderPatches), nameof(InitializeTranspiler))
+            prefix: PatchHelper.Method(typeof(ModLoaderPatches), nameof(InitializePrefix))
         );
         PatchHelper.Patch(
             harmony,
@@ -30,37 +33,18 @@ public static class ModLoaderPatches
         );
     }
 
-    // Rewrites `Path.Combine(directoryName, "mods")` inside ModManager.Initialize
-    // to push AppPaths.ExternalModsDir directly. No reflection on private fields,
-    // so the patch survives rebuilds that rename backing fields.
-    public static IEnumerable<CodeInstruction> InitializeTranspiler(
-        IEnumerable<CodeInstruction> instructions
-    )
+    // Swap the fileIo argument the game just constructed for our redirecting
+    // wrapper; the original Initialize body then continues unchanged. Using
+    // `ref` keeps this signature-stable across the sync/void → async/Task
+    // rewrite the game shipped in v0.107.0.
+    public static bool InitializePrefix(ref IModManagerFileIo fileIo)
     {
-        var matcher = new CodeMatcher(instructions).MatchStartForward(
-            new CodeMatch(OpCodes.Ldstr, "mods")
+        var originalFileIo = fileIo;
+        fileIo = new ExternalModsFileIo(AppPaths.ExternalModsDir, originalFileIo);
+        PatchHelper.Log(
+            $"[Mods] Redirected ModManager.Initialize fileIo -> {AppPaths.ExternalModsDir}"
         );
-
-        if (matcher.IsValid)
-        {
-            // IL pattern is: ldloc directoryName, ldstr "mods", call Path.Combine.
-            // Drop all three and push the external path literal instead.
-            matcher.Advance(-1);
-            matcher.RemoveInstructions(3);
-            matcher.InsertAndAdvance(new CodeInstruction(OpCodes.Ldstr, AppPaths.ExternalModsDir));
-            PatchHelper.Log(
-                $"[Mods] Redirected ModManager.Initialize to {AppPaths.ExternalModsDir}"
-            );
-        }
-        else
-        {
-            PatchHelper.Log(
-                "[Mods] Warning: could not locate \"mods\" ldstr in ModManager.Initialize; "
-                    + "external mods will be ignored."
-            );
-        }
-
-        return matcher.InstructionEnumeration();
+        return true;
     }
 
     // Skip the Steam-backed mod enumeration on Android (no Steamworks runtime).
