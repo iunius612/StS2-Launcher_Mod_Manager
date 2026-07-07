@@ -62,6 +62,25 @@ public static class ModelDbInitPatch
 
         var dictType = contentById.GetType();
         var setItemMethod = dictType.GetMethod("set_Item");
+        var keyType = dictType.GetGenericArguments()[0];
+        var removeMethod = dictType.GetMethod("Remove", new[] { keyType });
+
+        // AbstractModel.Id became a get-only autoprop in 0.108.0 that is only set
+        // inside the constructor, and the constructor's duplicate check now reads
+        // the dictionary directly (GetByIdOrNull) instead of the Contains() we
+        // suppress below. We resolve the base type via the assembly so a namespace
+        // move doesn't break the reflection.
+        var abstractModelType = modelDbType.Assembly.GetType(
+            "MegaCrit.Sts2.Core.Models.AbstractModel"
+        );
+        var idProp = abstractModelType?.GetProperty(
+            "Id",
+            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+        );
+        var idBackingField = abstractModelType?.GetField(
+            "<Id>k__BackingField",
+            BindingFlags.NonPublic | BindingFlags.Instance
+        );
 
         // Phase 1: Pre-populate dictionary with uninitialized objects
         PatchHelper.Log(
@@ -69,6 +88,7 @@ public static class ModelDbInitPatch
         );
 
         var typeObjects = new Dictionary<Type, object>();
+        var typeIds = new Dictionary<Type, object>();
         int preRegCount = 0;
 
         for (int i = 0; i < types.Length; i++)
@@ -80,6 +100,7 @@ public static class ModelDbInitPatch
                 var model = RuntimeHelpers.GetUninitializedObject(type);
                 setItemMethod.Invoke(contentById, new[] { id, model });
                 typeObjects[type] = model;
+                typeIds[type] = id;
                 preRegCount++;
             }
             catch (Exception ex)
@@ -119,8 +140,19 @@ public static class ModelDbInitPatch
             if (!typeObjects.ContainsKey(type))
                 continue;
 
+            var id = typeIds[type];
+            var model = typeObjects[type];
+
+            // 0.108.0's constructor throws DuplicateModelException if the id is
+            // already present (via GetByIdOrNull). Remove the pre-registered entry
+            // so the constructor sees an empty slot, sets its get-only Id, then
+            // re-register the same in-place instance. The finally guarantees the
+            // entry is restored even if the constructor throws — a missing entry
+            // would surface later as ModelNotFoundException.
             try
             {
+                removeMethod.Invoke(contentById, new[] { id });
+
                 RuntimeHelpers.RunClassConstructor(type.TypeHandle);
 
                 var ctor = type.GetConstructor(
@@ -131,7 +163,7 @@ public static class ModelDbInitPatch
                 );
                 if (ctor != null)
                 {
-                    ctor.Invoke(typeObjects[type], null);
+                    ctor.Invoke(model, null);
                 }
 
                 successCount++;
@@ -146,10 +178,48 @@ public static class ModelDbInitPatch
                     $"Phase 2 - Failed {type.Name}: {inner.GetType().Name}: {inner.Message}"
                 );
             }
+            finally
+            {
+                setItemMethod.Invoke(contentById, new[] { id, model });
+            }
         }
 
         _suppressContains = false;
         harmony.Unpatch(containsMethod, containsPrefix);
+
+        // Defense: any instance whose constructor failed still has a null get-only
+        // Id, and 0.108.0's ModelDb.InitIds() dereferences Id.Category -> NRE that
+        // kills GameStartup (black screen). Set the backing field directly from the
+        // key we already computed so a partial failure can't brick the whole boot.
+        if (idProp != null && idBackingField != null)
+        {
+            int patchedIds = 0;
+            foreach (var kvp in typeIds)
+            {
+                if (!typeObjects.TryGetValue(kvp.Key, out var model))
+                    continue;
+                try
+                {
+                    if (idProp.GetValue(model) == null)
+                    {
+                        idBackingField.SetValue(model, kvp.Value);
+                        patchedIds++;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    PatchHelper.Log($"Id backfill failed for {kvp.Key.Name}: {ex.Message}");
+                }
+            }
+            if (patchedIds > 0)
+                PatchHelper.Log($"Backfilled Id on {patchedIds} models with failed constructors");
+        }
+        else
+        {
+            PatchHelper.Log(
+                "Id backing field not found (older game version?); skipping Id backfill"
+            );
+        }
 
         if (failed.Count > 0)
         {

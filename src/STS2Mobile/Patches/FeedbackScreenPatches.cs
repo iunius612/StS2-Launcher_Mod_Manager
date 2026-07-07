@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Reflection;
 using Godot;
 using HarmonyLib;
 
@@ -56,6 +57,25 @@ public static class FeedbackScreenPatches
 
         foreach (var t in candidates)
         {
+            // 0.108.0 dropped the _Ready override on some of these types (e.g.
+            // NFeedbackScreenOpener). GetMethod would return the inherited Node._Ready,
+            // and Harmony throws "You can only patch implemented methods/constructors".
+            // Only patch types that actually declare their own _Ready.
+            var declared = t.GetMethod(
+                "_Ready",
+                BindingFlags.Public
+                    | BindingFlags.NonPublic
+                    | BindingFlags.Instance
+                    | BindingFlags.DeclaredOnly
+            );
+            if (declared == null)
+            {
+                PatchHelper.Log(
+                    $"[FeedbackScreen] {t.Name}._Ready skipped (not declared in this game version)"
+                );
+                continue;
+            }
+
             PatchHelper.Patch(
                 harmony,
                 t,
