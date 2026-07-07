@@ -94,6 +94,12 @@ public static class ModEntry
         // mod/game patch so it intercepts their wrapper generation.
         InitSetterEmitPatches.Apply(_harmony);
 
+        // issue #55 safety net: a mod's PatchAll class that still fails to import
+        // (residual after the DynEmit fix — version skew, bad image) degrades to a
+        // no-op instead of aborting the whole PatchAll into a boot softlock.
+        // Game-independent (patches HarmonyLib) — before any BaseLib/mod patching.
+        PatchAllResiliencePatches.Apply(_harmony);
+
         // Game patches require sts2.dll; if missing, fall through to standalone launcher.
         try
         {

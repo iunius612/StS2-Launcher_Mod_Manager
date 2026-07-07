@@ -6,7 +6,7 @@ using HarmonyLib;
 
 namespace STS2Mobile.Patches;
 
-// Mobile-compat shim for BaseLib v3.x. Three independent workarounds for
+// Mobile-compat shim for BaseLib v3.x. Two independent workarounds for
 // MonoMod/Cecil/Mono-Android emit limitations that BaseLib trips over on
 // the launcher's Mono Android runtime:
 //
@@ -18,20 +18,15 @@ namespace STS2Mobile.Patches;
 //    (AfterCardPlayed etc.) to no-op; rest of BaseLib works. See
 //    .repro/issue8_root_cause.md.
 //
-// 2) CombatRoomFromSerializableRewardExtPatch (issue #32): a plain Prefix on
-//    CombatRoom.FromSerializable whose wrapper generation throws
-//    MissingMethodException on set_ShouldResumeParentEventAfterCombat — an
-//    init-only setter (modreq IsExternalInit) in the original method body
-//    that MonoMod's import path can't resolve on Mono Android. The setter
-//    exists in the loaded sts2.dll bytes (PC and mobile use the same Steam
-//    depot 2868840/public). Skip the whole patch class so PatchClassProcessor
-//    never reaches UpdateWrapper. Degrades: RewardExtData (de)serialization
-//    for mid-combat saves with custom-pool rewards. Most mods unaffected.
-//    issue #55: superseded by InitSetterEmitPatches (DynEmit init-setter ->
-//    stfld rewrite) — remove this skip once the DynEmit fix is device-verified,
-//    which restores RewardExt (de)serialization instead of degrading it.
+// (Former workaround 2 — skipping CombatRoomFromSerializableRewardExtPatch to
+//  dodge the init-only setter modreq MissingMethodException, issue #32 — was
+//  removed in issue #55. The root cause is now fixed generally by
+//  InitSetterEmitPatches (DynEmit rewrites init-setter calls to backing-field
+//  stores), so that patch class applies normally and RewardExt (de)serialization
+//  works instead of being degraded. PatchAllResiliencePatches is the safety net
+//  for any residual import failure.)
 //
-// 3) CustomEnum static-field fixup (issue #32): BaseLib's GenEnumValues
+// 2) CustomEnum static-field fixup (issue #32): BaseLib's GenEnumValues
 //    Prefix on ModelDb.Init is supposed to FieldInfo.SetValue unique IDs
 //    onto 11 [CustomEnum] static TargetType fields in CustomTargetType. On
 //    mobile the prefix never logs and the fields stay at default
@@ -47,7 +42,6 @@ public static class BaseLibCompatPatches
     private static Harmony _harmony;
     private static bool _wired;
     private static bool _customEnumFixupDone;
-    private static Type _skipPatchContainerType;
 
     public static void Apply(Harmony harmony)
     {
@@ -65,7 +59,6 @@ public static class BaseLibCompatPatches
 
         var asm = args.LoadedAssembly;
         TryPatchAsyncMethodCallCreate(asm);
-        TryRegisterSkipFromSerializablePatch(asm);
         TryRegisterCustomEnumFixupOnModelDbInit(asm);
         _wired = true;
     }
@@ -117,81 +110,7 @@ public static class BaseLibCompatPatches
         return false;
     }
 
-    // ---- (2) Skip CombatRoomFromSerializableRewardExtPatch registration -------
-
-    private static void TryRegisterSkipFromSerializablePatch(Assembly baseLibAsm)
-    {
-        try
-        {
-            _skipPatchContainerType =
-                baseLibAsm.GetType(
-                    "BaseLib.Patches.Rewards.CombatRoomFromSerializableRewardExtPatch"
-                )
-                ?? baseLibAsm
-                    .GetTypes()
-                    .FirstOrDefault(t => t.Name == "CombatRoomFromSerializableRewardExtPatch");
-            if (_skipPatchContainerType == null)
-            {
-                PatchHelper.Log(
-                    "BaseLibCompat: CombatRoomFromSerializableRewardExtPatch type not found, skip-shim inactive"
-                );
-                return;
-            }
-
-            var pcpType = typeof(Harmony).Assembly.GetType("HarmonyLib.PatchClassProcessor");
-            if (pcpType == null)
-            {
-                PatchHelper.Log("BaseLibCompat: HarmonyLib.PatchClassProcessor type not found");
-                return;
-            }
-            var patchMethod = AccessTools.Method(pcpType, "Patch");
-            if (patchMethod == null)
-            {
-                PatchHelper.Log("BaseLibCompat: PatchClassProcessor.Patch method not found");
-                return;
-            }
-            var prefix = AccessTools.Method(
-                typeof(BaseLibCompatPatches),
-                nameof(PatchClassProcessorPatchPrefix)
-            );
-            _harmony.Patch(patchMethod, prefix: new HarmonyMethod(prefix));
-            PatchHelper.Log(
-                $"Patched HarmonyLib.PatchClassProcessor.Patch (will skip {_skipPatchContainerType.FullName})"
-            );
-        }
-        catch (Exception ex)
-        {
-            PatchHelper.Log($"BaseLibCompat: FromSerializable skip patch failed: {ex.Message}");
-        }
-    }
-
-    public static bool PatchClassProcessorPatchPrefix(
-        object __instance,
-        ref List<MethodInfo> __result
-    )
-    {
-        if (_skipPatchContainerType == null)
-            return true;
-        try
-        {
-            var f = AccessTools.Field(__instance.GetType(), "containerType");
-            if (f?.GetValue(__instance) is Type ctype && ctype == _skipPatchContainerType)
-            {
-                Console.WriteLine(
-                    $"[BaseLibCompat] Skipping {ctype.FullName} (mobile workaround — init-setter modreq not importable by MonoMod on Android)"
-                );
-                __result = new List<MethodInfo>();
-                return false;
-            }
-        }
-        catch
-        {
-            // best-effort; fall through to normal path
-        }
-        return true;
-    }
-
-    // ---- (3) CustomEnum static-field fixup on ModelDb.Init -------------------
+    // ---- (2) CustomEnum static-field fixup on ModelDb.Init -------------------
 
     private static void TryRegisterCustomEnumFixupOnModelDbInit(Assembly baseLibAsm)
     {
