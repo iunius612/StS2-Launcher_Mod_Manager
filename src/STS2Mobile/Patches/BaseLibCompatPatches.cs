@@ -27,6 +27,9 @@ namespace STS2Mobile.Patches;
 //    depot 2868840/public). Skip the whole patch class so PatchClassProcessor
 //    never reaches UpdateWrapper. Degrades: RewardExtData (de)serialization
 //    for mid-combat saves with custom-pool rewards. Most mods unaffected.
+//    issue #55: superseded by InitSetterEmitPatches (DynEmit init-setter ->
+//    stfld rewrite) — remove this skip once the DynEmit fix is device-verified,
+//    which restores RewardExt (de)serialization instead of degrading it.
 //
 // 3) CustomEnum static-field fixup (issue #32): BaseLib's GenEnumValues
 //    Prefix on ModelDb.Init is supposed to FieldInfo.SetValue unique IDs

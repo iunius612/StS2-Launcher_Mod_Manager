@@ -86,6 +86,14 @@ public static class ModEntry
         // (issue #11 affects the launcher UI too on Fold6).
         RenderDiagnosticPatches.Apply(_harmony);
 
+        // issue #55: rewrite init-only auto-property setter calls to backing-field
+        // stores during MonoMod DMD emit, so Harmony wrappers that copy a body
+        // setting an init-only property (BaseLib save-ext, HextechRunes, etc.)
+        // don't crash Mono Android's DynamicMethod JIT. Targets MonoMod.Utils
+        // (loaded with Harmony) — game-independent, must run before any BaseLib/
+        // mod/game patch so it intercepts their wrapper generation.
+        InitSetterEmitPatches.Apply(_harmony);
+
         // Game patches require sts2.dll; if missing, fall through to standalone launcher.
         try
         {
@@ -96,6 +104,10 @@ public static class ModEntry
             // BaseLib (node factories, content patches, etc.) can load.
             // See .repro/issue8_root_cause.md.
             BaseLibCompatPatches.Apply(_harmony);
+            // issue #55 (#3 trigger diagnostic, observe-only): trace whether
+            // ModelDb.Init's body ran before ModelDb.AllEncounters is read. Game-
+            // dependent (ModelDb), so inside the game-patch block.
+            InitSetterEmitPatches.ApplyInitTrace(_harmony);
             ModelDbInitPatch.Apply(_harmony);
             PlatformPatches.Apply(_harmony);
             ReleaseInfoPatches.Apply(_harmony);
