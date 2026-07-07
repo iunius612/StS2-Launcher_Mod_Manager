@@ -425,6 +425,67 @@ public class LauncherModel : IDisposable
         }
     }
 
+    // Issue #53 — true when a completed in-session depot download replaced the game
+    // assembly (sts2.dll) relative to the copy currently loaded in this process.
+    // Mirrors GodotApp.setupAssemblies' size+mtime skip test exactly, so the answer
+    // matches what Java would re-copy on the next boot: if that boot would swap in a
+    // new sts2.dll, the running process is on a stale assembly and must restart before
+    // booting the freshly downloaded PCK (else old assembly + new PCK mix).
+    public static bool GameAssemblyReplaced()
+    {
+        try
+        {
+            var dataDir = OS.GetDataDir();
+            var gameDir = Path.Combine(dataDir, "game");
+            if (!Directory.Exists(gameDir))
+                return false;
+
+            // The depot writes the managed assemblies into a data_* sibling of the
+            // PCK (e.g. data_sts2_windows_x86_64); findAssembliesDir picks the first.
+            string srcDll = null;
+            foreach (var sub in Directory.GetDirectories(gameDir, "data_*"))
+            {
+                var candidate = Path.Combine(sub, "sts2.dll");
+                if (File.Exists(candidate))
+                {
+                    srcDll = candidate;
+                    break;
+                }
+            }
+            if (srcDll == null)
+                return false;
+
+            var destDll = Path.Combine(
+                dataDir,
+                ".godot",
+                "mono",
+                "publish",
+                "arm64",
+                "sts2.dll"
+            );
+            if (!File.Exists(destDll))
+                return true; // nothing loaded on disk to match — treat as replaced
+
+            var src = new FileInfo(srcDll);
+            var dest = new FileInfo(destDll);
+            // Java skips the copy when dest.length == src.length && dest.mtime >= src.mtime.
+            // Assembly replaced = the negation of that up-to-date test.
+            bool upToDate =
+                dest.Length == src.Length && dest.LastWriteTimeUtc >= src.LastWriteTimeUtc;
+            PatchHelper.Log(
+                $"[Launcher] GameAssemblyReplaced: srcLen={src.Length} destLen={dest.Length} "
+                    + $"srcMtime={src.LastWriteTimeUtc:o} destMtime={dest.LastWriteTimeUtc:o} "
+                    + $"→ replaced={!upToDate}"
+            );
+            return !upToDate;
+        }
+        catch (Exception ex)
+        {
+            PatchHelper.Log($"[Launcher] GameAssemblyReplaced check failed: {ex.Message}");
+            return false;
+        }
+    }
+
     public static string FormatSize(long bytes)
     {
         if (bytes >= 1024L * 1024 * 1024)

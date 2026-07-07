@@ -67,6 +67,7 @@ public class LauncherController
         _model.DownloadCompleted += () =>
             _runOnMainThread(() =>
             {
+                bool wasBranchSwitch = _pendingBranchSwitch;
                 _view.SetStatus("Download complete! Restart to play.");
                 _view.Download.Visible = false;
                 // Issue #45: 브랜치 전환 직후 다운로드 완료라면 dst dll 과 mismatch
@@ -77,6 +78,26 @@ public class LauncherController
                     _model.NeedsRestartAfterBranchSwitch = true;
                     PatchHelper.Log("[Launcher] Branch-switch download complete — flagging restart");
                 }
+
+                // Issue #53: 인세션 same-branch 업데이트가 게임 PCK 로 부팅된 상태에서
+                // 완료되면 프로세스는 구 sts2.dll, 디스크는 새 PCK — in-process PLAY 시
+                // 구 어셈블리/신 PCK 혼합. 브랜치 전환은 위에서 처리되므로 여기선 순수
+                // 업데이트만: 실제로 게임 PCK 로 부팅됐고(InGameMode) 어셈블리가 실제로
+                // 교체된 경우에만 자동 재시작. 첫 설치(bootstrap, InGameMode=false)는
+                // 기존 RESTART APP 플로우 유지.
+                if (
+                    !wasBranchSwitch
+                    && _model.InGameMode
+                    && LauncherModel.GameAssemblyReplaced()
+                )
+                {
+                    PatchHelper.Log(
+                        "[Launcher] In-session update replaced game assembly — auto-restarting"
+                    );
+                    PromptUpdateRestart();
+                    return;
+                }
+
                 if (LauncherModel.GameFilesReady())
                 {
                     var text = ResolveLaunchButtonText();
@@ -969,6 +990,28 @@ public class LauncherController
             return;
         }
         _model.Launch();
+    }
+
+    // Issue #53: 인세션 게임 업데이트가 어셈블리를 교체했을 때 사용자에게 1줄 안내를
+    // 띄우고, 짧은 지연 후 자동 재시작한다. restartApp 은 AtlasWipe/ShaderWarmup/Quit
+    // 이 쓰는 것과 동일한 메커니즘 — 재부팅 시 Java setupAssemblies 가 새 sts2.dll 을
+    // dst 로 복사한 뒤 게임이 새 어셈블리로 부팅된다. 안내가 읽힐 시간을 주려 타이머
+    // (2s) 로 지연하되, 지연 중 PLAY 재진입을 막기 위해 액션 버튼은 숨긴다.
+    private void PromptUpdateRestart()
+    {
+        _view.Actions.HideAll();
+        _view.SetStatus("업데이트 적용을 위해 재시작합니다...");
+        try
+        {
+            var timer = _view.RootControl.GetTree().CreateTimer(2.0);
+            timer.Timeout += () => LauncherModel.GetGodotApp()?.Call("restartApp");
+        }
+        catch (Exception ex)
+        {
+            // Timer path unavailable (e.g. detached tree) — restart immediately.
+            PatchHelper.Log($"[Launcher] Update-restart timer failed, restarting now: {ex.Message}");
+            LauncherModel.GetGodotApp()?.Call("restartApp");
+        }
     }
 
     // Issue #45: Play 버튼 라벨은 NeedsRestartAfterBranchSwitch 가 set 이면 한국어

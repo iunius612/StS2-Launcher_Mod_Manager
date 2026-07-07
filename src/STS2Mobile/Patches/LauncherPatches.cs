@@ -190,15 +190,30 @@ public static class LauncherPatches
         // pressed PLAY, the launcher's job is done.
         launcher.QueueFree();
 
+        // Issue #53 — cover the launcher→game gap with a status overlay. The cloud
+        // handshake + conflict backup + sync apply below can take 1~2 min with nothing
+        // else on screen; without this the black screen reads as a crash and users kill
+        // the app mid-sync. Only shown when a cloud sync is actually going to run.
+        CloudSyncOverlay overlay = null;
+        bool cloudSyncWillRun =
+            CloudSyncEnabled && SavedAccountName != null && SavedRefreshToken != null;
+        if (cloudSyncWillRun)
+        {
+            overlay = new CloudSyncOverlay();
+            gameNode.AddChild(overlay);
+            overlay.Initialize();
+        }
+
         // Pre-PLAY cloud handshake: load the file cache, classify the local/cloud
         // state, and resolve any conflict via the dialog BEFORE InitSettingsData runs.
         // After this completes, ConstructDefaultPrefix has the info it needs to pick
         // the right SaveManager flavor.
         _cloudCacheReady = false;
-        if (CloudSyncEnabled && SavedAccountName != null && SavedRefreshToken != null)
+        if (cloudSyncWillRun)
         {
             try
             {
+                overlay?.SetStatus("클라우드 상태 확인 중...");
                 var existing = SteamKit2CloudSaveStore.Instance;
                 var cloudStore =
                     existing ?? new SteamKit2CloudSaveStore(SavedAccountName, SavedRefreshToken);
@@ -210,7 +225,7 @@ public static class LauncherPatches
                     var localStore = new GodotFileIo(
                         UserDataPathProvider.GetAccountScopedBasePath(null)
                     );
-                    await ResolveSyncDecisionAsync(gameNode, localStore, cloudStore);
+                    await ResolveSyncDecisionAsync(gameNode, localStore, cloudStore, overlay);
                 }
                 else
                 {
@@ -231,6 +246,10 @@ public static class LauncherPatches
         {
             PatchHelper.Log("[Cloud] Skipping cloud preload (sync disabled or no credentials)");
         }
+
+        // Sync work done — drop the overlay before the game boot path (ShaderWarmup
+        // has its own full-screen UI).
+        overlay?.QueueFree();
 
         if (ShaderWarmupScreen.NeedsWarmup())
         {
@@ -311,7 +330,8 @@ public static class LauncherPatches
     private static async Task ResolveSyncDecisionAsync(
         Node gameNode,
         ISaveStore localStore,
-        SteamKit2CloudSaveStore cloudStore
+        SteamKit2CloudSaveStore cloudStore,
+        CloudSyncOverlay overlay = null
     )
     {
         var result = await CloudSyncDecisions.DetermineAsync(localStore, cloudStore);
@@ -342,7 +362,7 @@ public static class LauncherPatches
                 // safe) but a fresh PC install with mobile progress would push
                 // (also mostly safe) — and a true conflict could pick the wrong
                 // side. Surfacing the choice removes both risk and surprise.
-                await HandleConflictAsync(gameNode, localStore, cloudStore, result);
+                await HandleConflictAsync(gameNode, localStore, cloudStore, result, overlay);
                 return;
         }
     }
@@ -351,7 +371,8 @@ public static class LauncherPatches
         Node gameNode,
         ISaveStore localStore,
         SteamKit2CloudSaveStore cloudStore,
-        SyncDecisionResult decision
+        SyncDecisionResult decision,
+        CloudSyncOverlay overlay = null
     )
     {
         // The dialog deliberately has no "remember my choice" option — which
@@ -381,12 +402,26 @@ public static class LauncherPatches
         LocalBackupService.ConflictBackupHandle conflictBackup = null;
         if (choice == CloudConflictChoice.KeepLocal || choice == CloudConflictChoice.KeepCloud)
         {
+            // Issue #53 — the discarded-cloud snapshot (KeepLocal) downloads 100+ files
+            // serially and is the slow phase users mistook for a hang. Feed per-file
+            // progress into the overlay (the overlay marshals to the main thread itself).
+            IProgress<(int done, int total)> backupProgress =
+                overlay == null
+                    ? null
+                    : new Progress<(int done, int total)>(p =>
+                        overlay.SetBackupProgress(p.done, p.total)
+                    );
+            overlay?.SetStatus("클라우드 백업 중", "");
             conflictBackup = await LocalBackupService.BackupConflictDiscardedAsync(
                 localStore,
                 cloudStore,
-                keepLocal: choice == CloudConflictChoice.KeepLocal
+                keepLocal: choice == CloudConflictChoice.KeepLocal,
+                backupProgress
             );
         }
+
+        if (choice != CloudConflictChoice.Cancel)
+            overlay?.SetStatus("동기화 적용 중...");
 
         switch (choice)
         {

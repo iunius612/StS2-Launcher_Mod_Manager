@@ -167,10 +167,18 @@ public static class LocalBackupService
     }
 
     // Phase 1 — discarded side, awaited before ApplyChosenSide overwrites it.
+    //
+    // progress (optional): reported once per cloud file as the discarded-cloud tree
+    // is downloaded serially (issue #53 — 100+ files / 1~2 min with no on-screen
+    // motion looked like a hung black screen). total is the snapshot file-list count,
+    // known before the first network read; done increments as each file is handled.
+    // Only the keepLocal=true (cloud download) path reports; the keepLocal=false
+    // path snapshots the local tree, which is fast and needs no progress.
     public static async Task<ConflictBackupHandle> BackupConflictDiscardedAsync(
         ISaveStore local,
         ICloudSaveStore cloud,
-        bool keepLocal
+        bool keepLocal,
+        IProgress<(int done, int total)> progress = null
     )
     {
         var handle = new ConflictBackupHandle();
@@ -189,7 +197,7 @@ public static class LocalBackupService
             int count;
             long bytes;
             if (keepLocal)
-                (count, bytes) = await SnapshotCloudTreeAsync(cloud, discardedDir)
+                (count, bytes) = await SnapshotCloudTreeAsync(cloud, discardedDir, progress)
                     .ConfigureAwait(false); // discarding cloud
             else
                 (count, bytes) = SnapshotLocalTree(local, discardedDir); // discarding local
@@ -268,14 +276,25 @@ public static class LocalBackupService
     }
 
     // Cloud variant — reads are async (network), scoped to the known save paths.
+    //
+    // progress (optional, issue #53): total is the full path-list count (known before
+    // the first network read); done increments once per path handled, regardless of
+    // whether the file existed or was skipped, so the bar advances steadily through
+    // the serial download and always reaches total. Reported inside the loop so the
+    // caller sees motion during the 1~2 min download instead of a frozen screen.
     private static async Task<(int count, long bytes)> SnapshotCloudTreeAsync(
         ICloudSaveStore cloud,
-        string setDir
+        string setDir,
+        IProgress<(int done, int total)> progress = null
     )
     {
         int count = 0;
         long bytes = 0;
-        foreach (var path in CloudSyncCoordinator.GetSaveFilePaths(cloud))
+        var paths = CloudSyncCoordinator.GetSaveFilePaths(cloud);
+        int total = paths.Count;
+        int done = 0;
+        progress?.Report((done, total));
+        foreach (var path in paths)
         {
             try
             {
@@ -291,6 +310,10 @@ public static class LocalBackupService
             catch (Exception ex)
             {
                 PatchHelper.Log($"{Tag} snapshot(cloud) skip {path}: {ex.Message}");
+            }
+            finally
+            {
+                progress?.Report((++done, total));
             }
         }
         return (count, bytes);
