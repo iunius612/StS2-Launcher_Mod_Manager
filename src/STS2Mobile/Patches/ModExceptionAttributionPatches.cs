@@ -25,13 +25,29 @@ public static class ModExceptionAttributionPatches
     private static readonly Dictionary<string, int> _logCounts = new();
     private static bool _firstObserved;
 
+    // issue #87 A/B test: patching LogException re-emits Godot's central
+    // managed-exception logger as a Harmony DMD — the same emit class that
+    // corrupted engine StringNames in issue #8. Reporter's chest-room crash
+    // (`BUG: Unreferenced static string to 0` storm) started 11s after this
+    // postfix first fired, so this build ships with the postfix OFF to isolate
+    // it. AppDomain.UnhandledException observation below stays on (no re-emit
+    // involved). Flip back to true (or delete the gate) once verdict is in.
+    private const bool InstallLogExceptionPostfix = false;
+
     public static void Apply(Harmony harmony)
     {
+#pragma warning disable CS0162 // A/B const gate above makes the install branch unreachable
         try
         {
             var type = AccessTools.TypeByName("Godot.NativeInterop.ExceptionUtils");
             var target = AccessTools.Method(type, "LogException");
-            if (target == null)
+            if (!InstallLogExceptionPostfix)
+            {
+                PatchHelper.Log(
+                    "[Issue87] A/B: LogException postfix DISABLED (AppDomain observer only)"
+                );
+            }
+            else if (target == null)
             {
                 PatchHelper.Log("[ModGuard] ExceptionUtils.LogException not found — observer skipped");
             }
@@ -58,6 +74,7 @@ public static class ModExceptionAttributionPatches
                 Observe(args.ExceptionObject as Exception, "unhandled");
         }
         catch { }
+#pragma warning restore CS0162
     }
 
     private static void LogExceptionPostfix(Exception e) => Observe(e, "godot");
